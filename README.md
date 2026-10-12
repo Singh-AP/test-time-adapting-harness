@@ -85,6 +85,29 @@ Every run writes `runs/<id>/`:
 
 `*.json` evaluations hold per-question outcomes; `*.traces.jsonl` hold every solver, python and search call.
 
+## Results so far
+
+Reasoning Gym, paper protocol (5 rounds, one proposal per round, kept only if the development score improves;
+25 development and 75 held-out questions per family from disjoint generator seeds). Solver
+`qwen.qwen3-32b-v1:0`, proposer `us.anthropic.claude-opus-5-5`. Full table: `results/reasoning-gym-multistep.md`.
+
+| Family | Seed held-out | Final held-out |
+|---|---|---|
+| maze | 0.18 | 0.99 |
+| count_primes | 0.02 | 1.00 |
+| caesar_cipher | 0.00 | 1.00 |
+| sudoku | 0.60 | 1.00 |
+| group_anagrams | 0.67 | 1.00 |
+| palindrome_partitioning | 0.01 | 1.00 |
+| rotten_oranges | 0.06 | 1.00 |
+| word_ladder | 0.07 | 0.26 |
+| **mean** | **0.201** | **0.907** |
+
+With this strong proposer, seven families reach their final score in round 1, mostly through direct algorithmic
+harnesses (for example, maze parses the grid and runs BFS, with the solver as a fallback): the paper's
+"algorithm" harness class. word_ladder needs vocabulary the harness cannot compute, so revisions compose the
+solver with search and improve over rounds. Solver calibration: `results/calibration.md`.
+
 ## Use from pi
 
 The repository is a pi package. Load it for one session, or install it:
