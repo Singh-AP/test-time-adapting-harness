@@ -1,6 +1,13 @@
 import { createModels, fauxAssistantMessage, fauxProvider, fauxText, fauxThinking } from "@earendil-works/pi-ai";
 import { describe, expect, test } from "vitest";
-import { isRetryable, PiProposerClient, PiSolverClient, stripThinking } from "../src/llm/pi-clients.ts";
+import {
+	isExpiredCredentials,
+	isRetryable,
+	PiProposerClient,
+	PiSolverClient,
+	stripThinking,
+	usageOf,
+} from "../src/llm/pi-clients.ts";
 
 type Steps = Parameters<ReturnType<typeof fauxProvider>["setResponses"]>[0];
 
@@ -49,6 +56,29 @@ describe("PiSolverClient", () => {
 		expect(faux.state.callCount).toBe(2);
 	});
 
+	test("waits for refreshed credentials after an expired token", async () => {
+		const { models, model, faux } = setup([
+			fauxAssistantMessage("", {
+				stopReason: "error",
+				errorMessage: "ExpiredTokenException: The security token included in the request is expired",
+			}),
+			fauxAssistantMessage("ok"),
+		]);
+		let refreshes = 0;
+		const client = new PiSolverClient({
+			models,
+			model,
+			retry: { ...fast, expiredPollMs: 1, expiredMaxWaitMs: 1000 },
+			refreshCredentials: async () => {
+				refreshes++;
+			},
+		});
+		const response = await client.complete({ messages: [{ role: "user", content: "x" }], maxTokens: 10 });
+		expect(response.text).toBe("ok");
+		expect(refreshes).toBe(1);
+		expect(faux.state.callCount).toBe(2);
+	});
+
 	test("does not retry validation errors", async () => {
 		const { models, model, faux } = setup([
 			fauxAssistantMessage("", { stopReason: "error", errorMessage: "ValidationException: bad input" }),
@@ -59,6 +89,14 @@ describe("PiSolverClient", () => {
 			"ValidationException",
 		);
 		expect(faux.state.callCount).toBe(1);
+	});
+});
+
+describe("usage accounting", () => {
+	test("counts cached prompt tokens as input", () => {
+		const message = fauxAssistantMessage("ok");
+		message.usage = { ...message.usage, input: 4, cacheRead: 100, cacheWrite: 2000, output: 7 };
+		expect(usageOf(message)).toMatchObject({ input: 2104, output: 7 });
 	});
 });
 
@@ -82,6 +120,10 @@ describe("helpers", () => {
 		expect(isRetryable("ThrottlingException: Rate exceeded")).toBe(true);
 		expect(isRetryable("ServiceUnavailableException: try later")).toBe(true);
 		expect(isRetryable("ValidationException: The model returned the following errors")).toBe(false);
+		expect(isExpiredCredentials("ExpiredTokenException: The security token included in the request is expired")).toBe(
+			true,
+		);
+		expect(isExpiredCredentials("ThrottlingException")).toBe(false);
 		expect(stripThinking("<think>a</think>\nB")).toBe("B");
 		expect(stripThinking("reasoning</think>C")).toBe("C");
 		expect(stripThinking("plain")).toBe("plain");

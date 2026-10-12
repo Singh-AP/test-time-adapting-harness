@@ -9,6 +9,7 @@ import {
 	type ThinkingLevel,
 } from "@earendil-works/pi-ai";
 import { amazonBedrockProvider } from "@earendil-works/pi-ai/providers/amazon-bedrock";
+import { loadSharedConfigFiles } from "@smithy/core/config";
 import type {
 	ProposerClient,
 	ProposerRequest,
@@ -42,15 +43,40 @@ export interface RetryPolicy {
 	maxAttempts: number;
 	baseDelayMs: number;
 	maxDelayMs: number;
+	/** How often to reload credentials while they are expired. */
+	expiredPollMs?: number;
+	/** How long to wait for refreshed credentials before failing. */
+	expiredMaxWaitMs?: number;
 }
 
-export const DEFAULT_RETRY: RetryPolicy = { maxAttempts: 6, baseDelayMs: 1000, maxDelayMs: 30_000 };
+export const DEFAULT_RETRY: RetryPolicy = {
+	maxAttempts: 6,
+	baseDelayMs: 1000,
+	maxDelayMs: 30_000,
+	expiredPollMs: 20_000,
+	expiredMaxWaitMs: 45 * 60_000,
+};
 
 const RETRYABLE =
 	/throttl|too many|rate.?limit|rate exceeded|\b429\b|\b50[0-4]\b|service.?unavailable|internal.?server|internalfailure|timed? ?out|timeout|ECONNRESET|EPIPE|ETIMEDOUT|socket hang up|overloaded|not ready|try again|network/i;
 
 export function isRetryable(message: string | undefined): boolean {
 	return RETRYABLE.test(message ?? "");
+}
+
+const EXPIRED = /ExpiredToken|token included in the request is expired|token has expired/i;
+
+/** Vended session credentials expired; a long run waits for them to be refreshed instead of failing. */
+export function isExpiredCredentials(message: string | undefined): boolean {
+	return EXPIRED.test(message ?? "");
+}
+
+/**
+ * The AWS SDK caches the shared config and credentials files for the life of the process, so refreshed
+ * credentials are not seen by later requests. Reloading the files replaces that cache.
+ */
+export async function reloadAwsSharedFiles(): Promise<void> {
+	await loadSharedConfigFiles({ ignoreCache: true });
 }
 
 /** Removes <think>...</think> blocks that some open models emit inline. */
@@ -67,14 +93,26 @@ export async function completeWithRetry(
 	policy: RetryPolicy,
 	signal?: AbortSignal,
 	onRetry?: (attempt: number, message: string) => void,
+	refreshCredentials: () => Promise<void> = reloadAwsSharedFiles,
 ): Promise<AssistantMessage> {
-	for (let attempt = 1; ; attempt++) {
+	let waitedMs = 0;
+	for (let attempt = 1; ; ) {
 		const message = await call();
-		if (message.stopReason !== "error") return message;
-		if (attempt >= policy.maxAttempts || signal?.aborted || !isRetryable(message.errorMessage)) return message;
+		if (message.stopReason !== "error" || signal?.aborted) return message;
+		if (isExpiredCredentials(message.errorMessage)) {
+			const pollMs = policy.expiredPollMs ?? 20_000;
+			if (waitedMs >= (policy.expiredMaxWaitMs ?? 45 * 60_000)) return message;
+			onRetry?.(attempt, `credentials expired; reloading in ${Math.round(pollMs / 1000)} s`);
+			await sleep(pollMs, signal);
+			waitedMs += pollMs;
+			await refreshCredentials();
+			continue;
+		}
+		if (attempt >= policy.maxAttempts || !isRetryable(message.errorMessage)) return message;
 		onRetry?.(attempt, message.errorMessage ?? "");
 		const delay = Math.min(policy.maxDelayMs, policy.baseDelayMs * 2 ** (attempt - 1)) * (0.5 + Math.random() * 0.5);
 		await sleep(delay, signal);
+		attempt++;
 	}
 }
 
@@ -117,8 +155,10 @@ function textOf(message: AssistantMessage): string {
 	return text;
 }
 
-function usageOf(message: AssistantMessage): Usage {
-	return { input: message.usage.input, output: message.usage.output, cost: message.usage.cost.total };
+/** Input includes prompt tokens served from or written to the provider's cache. */
+export function usageOf(message: AssistantMessage): Usage {
+	const u = message.usage;
+	return { input: u.input + u.cacheRead + u.cacheWrite, output: u.output, cost: u.cost.total };
 }
 
 export interface PiClientOptions {
@@ -128,6 +168,8 @@ export interface PiClientOptions {
 	/** Bounds concurrent requests across all callers of this client. */
 	limiter?: Semaphore;
 	onRetry?: (attempt: number, message: string) => void;
+	/** Reloads credentials after an expired-token error (default: reload the AWS shared files). */
+	refreshCredentials?: () => Promise<void>;
 }
 
 /** Frozen solver: a pi-ai model behind the harness's llm() global. */
@@ -148,6 +190,7 @@ export class PiSolverClient implements SolverClient {
 				this.options.retry ?? DEFAULT_RETRY,
 				signal,
 				this.options.onRetry,
+				this.options.refreshCredentials,
 			);
 		const message = this.options.limiter ? await this.options.limiter.run(call) : await call();
 		if (message.stopReason === "error" || message.stopReason === "aborted") {
@@ -175,6 +218,7 @@ export class PiProposerClient implements ProposerClient {
 				this.options.retry ?? DEFAULT_RETRY,
 				signal,
 				this.options.onRetry,
+				this.options.refreshCredentials,
 			);
 		const message = this.options.limiter ? await this.options.limiter.run(call) : await call();
 		if (message.stopReason === "error" || message.stopReason === "aborted") {
