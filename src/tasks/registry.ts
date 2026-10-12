@@ -1,5 +1,6 @@
 import { defaultPythonPath } from "../config.ts";
 import type { Task } from "../core/types.ts";
+import { createQaTask } from "./qa/task.ts";
 import { ReasoningGymBridge } from "./reasoning-gym/bridge.ts";
 import { createReasoningGymTask } from "./reasoning-gym/task.ts";
 import { createArithmeticTask } from "./toy.ts";
@@ -13,7 +14,7 @@ export interface TaskOptions {
 	bridge?: ReasoningGymBridge;
 }
 
-/** Builds a task from a spec: `toy:addition` or `rg:<family>`. */
+/** Builds a task from a spec: `toy:addition`, `rg:<family>`, or `qa:<hotpotqa|musique|2wiki>`. */
 export async function createTask(spec: string, o: TaskOptions = {}): Promise<Task> {
 	const colon = spec.indexOf(":");
 	const kind = colon < 0 ? spec : spec.slice(0, colon);
@@ -38,5 +39,10 @@ export async function createTask(spec: string, o: TaskOptions = {}): Promise<Tas
 			throw error;
 		}
 	}
-	throw new Error(`Unknown task "${spec}". Use toy:addition or rg:<family> (list families with \`tta families\`).`);
+	if (kind === "qa" && (name === "hotpotqa" || name === "musique" || name === "2wiki")) {
+		return createQaTask({ name, devSize: o.devSize, testSize: o.heldoutSize, seed: o.devSeed });
+	}
+	throw new Error(
+		`Unknown task "${spec}". Use toy:addition, rg:<family> (list families with \`tta families\`), or qa:hotpotqa|musique|2wiki.`,
+	);
 }

@@ -1,0 +1,6 @@
+{"id": "q0", "question": "Were Scott Derrickson and Ed Wood of the same nationality?", "answer": "yes", "aliases": [], "supporting_titles": ["Scott Derrickson", "Ed Wood"], "type": "comparison"}
+{"id": "q1", "question": "Who directed the 2016 film Doctor Strange?", "answer": "Scott Derrickson", "aliases": ["Derrickson"], "supporting_titles": ["Doctor Strange (2016 film)"], "type": "bridge"}
+{"id": "q2", "question": "In what year was the tower in the capital of France completed?", "answer": "1889", "aliases": [], "supporting_titles": ["Paris", "Eiffel Tower"], "type": "bridge"}
+{"id": "q3", "question": "What nationality was the engineer whose company built the Eiffel Tower?", "answer": "French", "aliases": [], "supporting_titles": ["Eiffel Tower", "Gustave Eiffel"], "type": "bridge"}
+{"id": "q4", "question": "Is Paris the capital of France?", "answer": "yes", "aliases": [], "supporting_titles": ["Paris"], "type": "comparison"}
+{"id": "q5", "question": "What city is the Eiffel Tower in?", "answer": "Paris", "aliases": [], "supporting_titles": ["Eiffel Tower"], "type": "bridge"}
