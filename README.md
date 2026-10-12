@@ -116,9 +116,10 @@ Gains accumulate over rounds, as in the paper, and the harness adapted on Hotpot
 benchmarks it never saw. MuSiQue's final round fell from its 0.420 peak: best-of-G advances even to a worse
 candidate, chosen on only 32 noisy scoring questions.
 
-**Agentic versus single-shot proposer** (Haiku 4.5, 8 new families, 3 rounds): 0.249 -> 0.784 agentic versus
-0.246 -> 0.764 single-shot. The agentic pi session fixes some families earlier because it can test revisions on
-feedback questions, at about 3.6 times the proposer cost (`results/agentic-vs-single.md`).
+**Agentic versus single-shot proposer** (Haiku 4.5, 8 new families, 3 rounds): mean held-out after round 1 is
+0.753 agentic versus 0.614 single-shot, and 0.784 versus 0.764 after round 3. The agentic pi session adapts faster
+because it can test revisions on feedback questions, at about 4 times the proposer cost
+(`results/agentic-vs-single.md`).
 
 **Outer loop without weight updates** (`results/transfer.md`): a playbook distilled from 47 revision episodes on
 training families raised a weak proposer's (Qwen3-32B) mean held-out gain on 8 unseen families from +0.023 to
