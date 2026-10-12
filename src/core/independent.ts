@@ -149,6 +149,7 @@ export async function independentRevisions(p: IndependentParams): Promise<Indepe
 		proposals.map(async (proposal, index): Promise<IndependentProposal> => {
 			const dir = `proposals/p${index}`;
 			await store.writeText(`${dir}/transcript.md`, renderTranscript(proposal));
+			await store.writeJson(`${dir}/transcript.json`, { system: proposal.system, messages: proposal.transcript });
 			let score = seedHeldout.mean;
 			let hash: string | undefined;
 			if (proposal.status === "edit" && proposal.source) {

@@ -321,6 +321,10 @@ export async function adapt(p: AdaptParams): Promise<AdaptSummary> {
 					transcript: undefined,
 				});
 				await store.writeText(`${cdir}/transcript.md`, renderTranscript(proposal));
+				await store.writeJson(`${cdir}/transcript.json`, {
+					system: proposal.system,
+					messages: proposal.transcript,
+				});
 				if (proposal.status === "invalid") {
 					return {
 						proposal,

@@ -54,6 +54,12 @@ describe("adapt", () => {
 		expect(summary.finalHeldout).toBe(1);
 		expect(summary.usage.proposer.calls).toBe(1);
 		expect(await readFile(join(runDir, "final.js"), "utf8")).toContain("CAREFUL");
+		const transcript = JSON.parse(
+			await readFile(join(runDir, "round-01", "candidates", "c0", "transcript.json"), "utf8"),
+		);
+		expect(transcript.system).toContain("harness engineer");
+		expect(transcript.messages[0].role).toBe("user");
+		expect(transcript.messages[1].content).toContain("<<<<<<< SEARCH");
 		const round1 = JSON.parse(await readFile(join(runDir, "round-01", "round.json"), "utf8"));
 		expect(round1.candidates[0].score).toBe(1);
 		const report2 = await readFile(join(runDir, "round-02", "report.md"), "utf8");
