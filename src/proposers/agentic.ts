@@ -53,7 +53,7 @@ export function agenticSystemPrompt(o: ProposeOptions, maxFeedbackRuns: number):
 Workspace files:
 - harness.js: the current harness. Edit it in place.
 - REPORT.md: execution report of the current harness on development questions.
-- TASK.md: the task description and the harness API.
+- TASK.md: the task description and the harness API.${o.playbook ? "\n- PLAYBOOK.md: lessons from adapting harnesses on other tasks." : ""}
 
 Tools:
 - read, edit, write: workspace files only.
@@ -142,6 +142,11 @@ export function createAgenticProposer(a: AgenticProposerOptions): ProposeFn {
 			`# Development score ${fmt(o.parentScore)} on ${o.feedbackSize} questions\n\n${o.report}\n`,
 		);
 		await writeFile(join(workspace, "TASK.md"), taskFile(o));
+		if (o.playbook)
+			await writeFile(
+				join(workspace, "PLAYBOOK.md"),
+				`# Lessons from previous adaptations (other tasks)\n\n${o.playbook.trim()}\n`,
+			);
 		const system = agenticSystemPrompt(o, maxFeedbackRuns);
 		const errors: string[] = [];
 		let feedbackRuns = 0;

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
@@ -9,6 +9,7 @@ import { evaluateHarness } from "./core/executor.ts";
 import { independentRevisions } from "./core/independent.ts";
 import { type AdaptConfig, adapt, QA_PROTOCOL, REASONING_GYM_PROTOCOL, renderUsage } from "./core/loop.ts";
 import { exportLearningData } from "./learning/export.ts";
+import { collectEpisodes, distillPlaybook } from "./learning/playbook.ts";
 import { createBedrockModels, PiProposerClient, PiSolverClient, requireModel } from "./llm/pi-clients.ts";
 import { createBedrockAgenticProposer } from "./proposers/agentic.ts";
 import { ReasoningGymBridge } from "./tasks/reasoning-gym/bridge.ts";
@@ -25,6 +26,7 @@ Usage:
   tta eval --task <spec> --harness <file>  Score a harness on dev and held-out questions
   tta families                             List Reasoning Gym families
   tta export --out <dir> <run-dir>...      Export GRPO rollout groups and an SFT corpus from runs
+  tta playbook --out <file> <run-dir>...   Distill a task-agnostic revision playbook from runs
 
 Task specs: toy:addition, rg:<family>
 
@@ -49,6 +51,7 @@ Options:
   --question-timeout <s>     Seconds per question (default ${DEFAULT_BUDGETS.questionTimeoutMs / 1000})
   --temperature <t>          Default solver temperature (default 0.7)
   --branch-hints             Diversify parallel proposals
+  --playbook <file>          Show lessons distilled from other tasks to the proposer
   --proposer-mode <mode>     single (one prompt, SEARCH/REPLACE) or agentic (pi coding-agent session); default single
   --feedback-runs <n>        Agentic: feedback evaluations per proposal (default 3)
   --agent-timeout <s>        Agentic: seconds per proposal (default 1200)
@@ -87,6 +90,7 @@ const OPTIONS = {
 	"feedback-runs": { type: "string" },
 	"agent-timeout": { type: "string" },
 	out: { type: "string" },
+	playbook: { type: "string" },
 	"run-dir": { type: "string" },
 	seed: { type: "string" },
 	help: { type: "boolean", short: "h" },
@@ -145,6 +149,20 @@ async function main(): Promise<void> {
 		process.stdout.write(
 			`${counts.groups} groups, ${counts.candidates} candidates, ${counts.sft} SFT examples -> ${out}\n`,
 		);
+		return;
+	}
+	if (command === "playbook") {
+		const out = values.out ?? repoPath("results", "playbook.md");
+		const episodes = await collectEpisodes(positionals.slice(1));
+		const models = createBedrockModels();
+		const client = new PiProposerClient({
+			models,
+			model: requireModel(models, values.proposer ?? process.env.TTA_PROPOSER_MODEL ?? DEFAULT_PROPOSER_MODEL),
+			reasoning: reasoningLevel(values.reasoning),
+		});
+		const playbook = await distillPlaybook(client, episodes);
+		await writeFile(out, `${playbook}\n`);
+		process.stdout.write(`${episodes.length} episodes from ${positionals.length - 1} runs -> ${out}\n`);
 		return;
 	}
 	if (!["adapt", "independent", "eval"].includes(command))
@@ -215,6 +233,7 @@ async function main(): Promise<void> {
 			reasoning: reasoningLevel(values.reasoning),
 			onRetry: (attempt, message) => log(`proposer retry ${attempt}: ${message.slice(0, 160)}`),
 		});
+		const playbook = values.playbook ? await readFile(values.playbook, "utf8") : undefined;
 		const seedSource = await readFile(values["seed-harness"] ?? repoPath("seeds", "rg-seed.js"), "utf8");
 		const runDir = values["run-dir"] ?? defaultRunDir(command, spec);
 		const preset = values.protocol === "qa" ? QA_PROTOCOL : REASONING_GYM_PROTOCOL;
@@ -252,6 +271,7 @@ async function main(): Promise<void> {
 					seed,
 					branchHints: values["branch-hints"] ?? true,
 					feedbackSize: sizeOrAll(values.feedback, preset.feedbackSize),
+					playbook,
 				},
 				runDir,
 				log,
@@ -275,6 +295,7 @@ async function main(): Promise<void> {
 			budgets,
 			concurrency,
 			seed,
+			playbook,
 		};
 		const summary = await adapt({ task, seedSource, config, deps, runDir, log });
 		const lines = summary.rounds.map(

@@ -70,12 +70,15 @@ export function revisionPrompt(o: {
 	feedbackSize: number;
 	report: string;
 	branch?: { index: number; total: number };
+	/** Task-agnostic lessons distilled from adaptations on other tasks. */
+	playbook?: string;
 }): string {
 	const parts = [
 		`# Task\nName: ${o.task.name}\n${o.task.description}`,
 		`# Current harness (development score ${o.score.toFixed(3)} on ${o.feedbackSize} questions)\n\`\`\`js\n${o.source.replace(/\n$/, "")}\n\`\`\``,
 		`# Execution report\n${o.report}`,
 	];
+	if (o.playbook) parts.push(`# Lessons from previous adaptations (other tasks)\n${o.playbook.trim()}`);
 	if (o.branch) {
 		parts.push(
 			`# Branch\nYou are proposal ${o.branch.index + 1} of ${o.branch.total} sampled independently from this same report. To keep proposals diverse, rank the promising changes yourself and pursue option number ${o.branch.index + 1}, or a distinct variation if you see fewer options.`,

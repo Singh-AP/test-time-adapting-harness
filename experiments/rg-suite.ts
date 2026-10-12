@@ -23,6 +23,7 @@ const { values } = parseArgs({
 		"proposer-mode": { type: "string" },
 		"feedback-runs": { type: "string" },
 		"agent-timeout": { type: "string" },
+		playbook: { type: "string" },
 		rounds: { type: "string" },
 		dev: { type: "string" },
 		heldout: { type: "string" },
@@ -61,6 +62,7 @@ const propose =
 		: undefined;
 const python = createPythonRunner({ pythonPath: defaultPythonPath(), maxConcurrent: 12 });
 const bridge = new ReasoningGymBridge({ pythonPath: defaultPythonPath() });
+const playbook = values.playbook ? await readFile(values.playbook, "utf8") : undefined;
 const seedSource = await readFile(repoPath("seeds", "rg-seed.js"), "utf8");
 
 const summaries = await mapLimit(
@@ -79,6 +81,7 @@ const summaries = await mapLimit(
 				seedSource,
 				config: {
 					...REASONING_GYM_PROTOCOL,
+					playbook,
 					rounds,
 					budgets: { ...DEFAULT_BUDGETS, questionTimeoutMs: 180_000 },
 					concurrency: 8,
@@ -123,7 +126,7 @@ const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.l
 const table = [
 	`# Reasoning Gym multistep adaptation (${tag})`,
 	"",
-	`Solver ${solverId}, proposer ${proposerId}. Proposer mode ${values["proposer-mode"] ?? "single"}. Protocol: ${rounds} rounds, one proposal per round, retained only if the development score improves; held-out scores after each round.`,
+	`Solver ${solverId}, proposer ${proposerId}. Proposer mode ${values["proposer-mode"] ?? "single"}${playbook ? ", with playbook" : ""}. Protocol: ${rounds} rounds, one proposal per round, retained only if the development score improves; held-out scores after each round.`,
 	"",
 	`| ${header.join(" | ")} |`,
 	`|${header.map(() => "---").join("|")}|`,

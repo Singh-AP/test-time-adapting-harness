@@ -52,6 +52,8 @@ export interface ProposeOptions {
 	screen: (source: string) => Promise<ScreenResult>;
 	/** Feedback questions a tool-using proposer may evaluate candidates on. */
 	feedback?: FeedbackContext;
+	/** Task-agnostic lessons from other tasks (non-parametric outer loop). */
+	playbook?: string;
 	signal?: AbortSignal;
 }
 
@@ -73,6 +75,7 @@ export async function propose(o: ProposeOptions): Promise<Proposal> {
 				feedbackSize: o.feedbackSize,
 				report: o.report,
 				branch: o.branch,
+				playbook: o.playbook,
 			}),
 		},
 	];

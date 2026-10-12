@@ -34,6 +34,8 @@ export interface AdaptConfig {
 	reward: "rg" | "qa";
 	/** Greedy protocol only: sample nothing when the parent already scores 1.0 on the scoring set. */
 	skipPerfect?: boolean;
+	/** Lessons distilled from other tasks, shown to the proposer. */
+	playbook?: string;
 }
 
 export type ProtocolPreset = Omit<AdaptConfig, "budgets" | "concurrency" | "seed">;
@@ -302,6 +304,7 @@ export async function adapt(p: AdaptParams): Promise<AdaptSummary> {
 					maxLines: config.maxLines,
 					attempts: config.attempts,
 					branch: config.branchHints && config.proposals > 1 ? { index, total: config.proposals } : undefined,
+					playbook: config.playbook,
 					screen,
 					feedback: { task, questions: feedback, deps, concurrency: config.concurrency },
 					signal: p.signal,

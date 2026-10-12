@@ -27,6 +27,7 @@ export interface IndependentConfig {
 	seed: number;
 	branchHints: boolean;
 	feedbackSize: number | "all";
+	playbook?: string;
 }
 
 export interface IndependentParams {
@@ -138,6 +139,7 @@ export async function independentRevisions(p: IndependentParams): Promise<Indepe
 				maxLines: config.maxLines,
 				attempts: config.attempts,
 				branch: config.branchHints && p.proposals > 1 ? { index, total: p.proposals } : undefined,
+				playbook: config.playbook,
 				screen: (source) => screenHarness(source, { maxLines: config.maxLines, shownQuestions, shownAnswers }),
 				feedback: { task, questions: feedback, deps, concurrency: config.concurrency },
 				signal: p.signal,
