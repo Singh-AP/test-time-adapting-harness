@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { parseArgs } from "node:util";
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
 import { DEFAULT_PROPOSER_MODEL, DEFAULT_SOLVER_MODEL, defaultPythonPath, repoPath } from "./config.ts";
@@ -8,6 +9,7 @@ import { evaluateHarness } from "./core/executor.ts";
 import { independentRevisions } from "./core/independent.ts";
 import { type AdaptConfig, adapt, QA_PROTOCOL, REASONING_GYM_PROTOCOL, renderUsage } from "./core/loop.ts";
 import { createBedrockModels, PiProposerClient, PiSolverClient, requireModel } from "./llm/pi-clients.ts";
+import { createBedrockAgenticProposer } from "./proposers/agentic.ts";
 import { ReasoningGymBridge } from "./tasks/reasoning-gym/bridge.ts";
 import { createTask } from "./tasks/registry.ts";
 import { createPythonRunner } from "./tools/python.ts";
@@ -45,6 +47,9 @@ Options:
   --question-timeout <s>     Seconds per question (default ${DEFAULT_BUDGETS.questionTimeoutMs / 1000})
   --temperature <t>          Default solver temperature (default 0.7)
   --branch-hints             Diversify parallel proposals
+  --proposer-mode <mode>     single (one prompt, SEARCH/REPLACE) or agentic (pi coding-agent session); default single
+  --feedback-runs <n>        Agentic: feedback evaluations per proposal (default 3)
+  --agent-timeout <s>        Agentic: seconds per proposal (default 1200)
   --no-heldout               Skip held-out evaluation
   --run-dir <dir>            Artifact directory (default runs/<time>-<command>-<task>)
   --seed <n>                 Sampling seed (default 1)
@@ -76,6 +81,9 @@ const OPTIONS = {
 	temperature: { type: "string" },
 	"branch-hints": { type: "boolean" },
 	"no-heldout": { type: "boolean" },
+	"proposer-mode": { type: "string" },
+	"feedback-runs": { type: "string" },
+	"agent-timeout": { type: "string" },
 	"run-dir": { type: "string" },
 	seed: { type: "string" },
 	help: { type: "boolean", short: "h" },
@@ -200,14 +208,31 @@ async function main(): Promise<void> {
 		const runDir = values["run-dir"] ?? defaultRunDir(command, spec);
 		const preset = values.protocol === "qa" ? QA_PROTOCOL : REASONING_GYM_PROTOCOL;
 		const seed = integer(values.seed, 1);
-		log(`proposer ${proposerModel.id}; artifacts in ${runDir}`);
+		const mode = values["proposer-mode"] ?? "single";
+		if (mode !== "single" && mode !== "agentic")
+			throw new Error(`--proposer-mode must be single or agentic, got "${mode}"`);
+		const deps =
+			mode === "agentic"
+				? {
+						solver,
+						python,
+						propose: await createBedrockAgenticProposer({
+							agentDir: join(runDir, ".pi-agent"),
+							modelId: proposerModel.id,
+							thinkingLevel: reasoningLevel(values.reasoning) ?? "off",
+							maxFeedbackRuns: integer(values["feedback-runs"], 3),
+							timeoutMs: integer(values["agent-timeout"], 1200) * 1000,
+						}),
+					}
+				: { solver, proposer, python };
+		log(`proposer ${proposerModel.id} (${mode}); artifacts in ${runDir}`);
 
 		if (command === "independent") {
 			const summary = await independentRevisions({
 				task,
 				seedSource,
 				proposals: integer(values.proposals, 8),
-				deps: { solver, proposer, python },
+				deps,
 				config: {
 					budgets,
 					concurrency,
@@ -240,7 +265,7 @@ async function main(): Promise<void> {
 			concurrency,
 			seed,
 		};
-		const summary = await adapt({ task, seedSource, config, deps: { solver, proposer, python }, runDir, log });
+		const summary = await adapt({ task, seedSource, config, deps, runDir, log });
 		const lines = summary.rounds.map(
 			(r) => `round ${r.round}: ${r.selection.reason}; held-out ${r.heldout === undefined ? "-" : fmt(r.heldout)}`,
 		);

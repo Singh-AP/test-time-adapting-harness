@@ -7,6 +7,7 @@ import { DEFAULT_PROPOSER_MODEL, DEFAULT_SOLVER_MODEL, defaultPythonPath, repoPa
 import { DEFAULT_BUDGETS } from "../src/core/capabilities.ts";
 import { type AdaptSummary, adapt, REASONING_GYM_PROTOCOL } from "../src/core/loop.ts";
 import { createBedrockModels, PiProposerClient, PiSolverClient, requireModel } from "../src/llm/pi-clients.ts";
+import { createBedrockAgenticProposer } from "../src/proposers/agentic.ts";
 import { ReasoningGymBridge } from "../src/tasks/reasoning-gym/bridge.ts";
 import { createReasoningGymTask } from "../src/tasks/reasoning-gym/task.ts";
 import { createPythonRunner } from "../src/tools/python.ts";
@@ -19,6 +20,9 @@ const { values } = parseArgs({
 		solver: { type: "string" },
 		proposer: { type: "string" },
 		reasoning: { type: "string" },
+		"proposer-mode": { type: "string" },
+		"feedback-runs": { type: "string" },
+		"agent-timeout": { type: "string" },
 		rounds: { type: "string" },
 		dev: { type: "string" },
 		heldout: { type: "string" },
@@ -45,6 +49,16 @@ const proposer = new PiProposerClient({
 	model: requireModel(models, proposerId),
 	reasoning: (values.reasoning ?? "medium") as "medium",
 });
+const propose =
+	values["proposer-mode"] === "agentic"
+		? await createBedrockAgenticProposer({
+				agentDir: repoPath("runs", `${tag}-pi-agent`),
+				modelId: proposerId,
+				thinkingLevel: (values.reasoning ?? "medium") as "medium",
+				maxFeedbackRuns: Number(values["feedback-runs"] ?? 3),
+				timeoutMs: Number(values["agent-timeout"] ?? 1200) * 1000,
+			})
+		: undefined;
 const python = createPythonRunner({ pythonPath: defaultPythonPath(), maxConcurrent: 12 });
 const bridge = new ReasoningGymBridge({ pythonPath: defaultPythonPath() });
 const seedSource = await readFile(repoPath("seeds", "rg-seed.js"), "utf8");
@@ -70,7 +84,7 @@ const summaries = await mapLimit(
 					concurrency: 8,
 					seed: 1,
 				},
-				deps: { solver, proposer, python },
+				deps: propose ? { solver, propose, python } : { solver, proposer, python },
 				runDir: repoPath("runs", `${tag}-rg-${family}`),
 				log: (line) => process.stderr.write(`[${family}] ${line}\n`),
 			});
@@ -109,7 +123,7 @@ const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.l
 const table = [
 	`# Reasoning Gym multistep adaptation (${tag})`,
 	"",
-	`Solver ${solverId}, proposer ${proposerId}. Protocol: ${rounds} rounds, one proposal per round, retained only if the development score improves; held-out scores after each round.`,
+	`Solver ${solverId}, proposer ${proposerId}. Proposer mode ${values["proposer-mode"] ?? "single"}. Protocol: ${rounds} rounds, one proposal per round, retained only if the development score improves; held-out scores after each round.`,
 	"",
 	`| ${header.join(" | ")} |`,
 	`|${header.map(() => "---").join("|")}|`,

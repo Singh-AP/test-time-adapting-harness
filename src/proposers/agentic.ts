@@ -9,7 +9,7 @@ import {
 	createReadToolDefinition,
 	createWriteToolDefinition,
 	defineTool,
-	type ModelRuntime,
+	ModelRuntime,
 	type ResourceLoader,
 	SessionManager,
 	SettingsManager,
@@ -282,4 +282,28 @@ export function createAgenticProposer(a: AgenticProposerOptions): ProposeFn {
 		if (!screened.ok) return { ...base, status: "invalid", applied: false, reason: screened.reason };
 		return { ...base, status: "edit", applied: true, source: finalSource };
 	};
+}
+
+/** Agentic proposer on a Bedrock model, with a pi model runtime stored under `agentDir`. */
+export async function createBedrockAgenticProposer(o: {
+	agentDir: string;
+	modelId: string;
+	thinkingLevel?: ThinkingLevel | "off";
+	maxFeedbackRuns?: number;
+	timeoutMs?: number;
+}): Promise<ProposeFn> {
+	const runtime = await ModelRuntime.create({
+		authPath: join(o.agentDir, "auth.json"),
+		modelsPath: join(o.agentDir, "models.json"),
+		refreshOnCreate: false,
+	});
+	const model = runtime.getModel("amazon-bedrock", o.modelId);
+	if (!model) throw new Error(`Unknown amazon-bedrock model "${o.modelId}"`);
+	return createAgenticProposer({
+		runtime,
+		model,
+		thinkingLevel: o.thinkingLevel,
+		maxFeedbackRuns: o.maxFeedbackRuns,
+		timeoutMs: o.timeoutMs,
+	});
 }
