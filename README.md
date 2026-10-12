@@ -85,28 +85,47 @@ Every run writes `runs/<id>/`:
 
 `*.json` evaluations hold per-question outcomes; `*.traces.jsonl` hold every solver, python and search call.
 
-## Results so far
+## Results
 
-Reasoning Gym, paper protocol (5 rounds, one proposal per round, kept only if the development score improves;
-25 development and 75 held-out questions per family from disjoint generator seeds). Solver
-`qwen.qwen3-32b-v1:0`, proposer `us.anthropic.claude-opus-5-5`. Full table: `results/reasoning-gym-multistep.md`.
+All runs: solver `qwen.qwen3-32b-v1:0` on Amazon Bedrock, held-out questions never shown to the proposer or used
+for selection, one run per configuration. Tables and per-round curves are in `results/`.
 
-| Family | Seed held-out | Final held-out |
+**Reasoning Gym, 8 families, 5 rounds** (paper protocol: one proposal per round, kept only if the 25-question
+development score improves; 75 held-out questions per family):
+
+| Proposer | Mean held-out, seed -> final | Proposer cost |
 |---|---|---|
-| maze | 0.18 | 0.99 |
-| count_primes | 0.02 | 1.00 |
-| caesar_cipher | 0.00 | 1.00 |
-| sudoku | 0.60 | 1.00 |
-| group_anagrams | 0.67 | 1.00 |
-| palindrome_partitioning | 0.01 | 1.00 |
-| rotten_oranges | 0.06 | 1.00 |
-| word_ladder | 0.07 | 0.26 |
-| **mean** | **0.201** | **0.907** |
+| Claude Opus 5.5 | 0.201 -> 0.907 | $1.64 |
+| Claude Haiku 4.5 | 0.199 -> 0.891 | $0.50 |
 
-With this strong proposer, seven families reach their final score in round 1, mostly through direct algorithmic
-harnesses (for example, maze parses the grid and runs BFS, with the solver as a fallback): the paper's
-"algorithm" harness class. word_ladder needs vocabulary the harness cannot compute, so revisions compose the
-solver with search and improve over rounds. Solver calibration: `results/calibration.md`.
+Seven of eight families reach 0.96-1.00 in the first round. The structural audit (`results/audit-rg-*.md`) shows
+why: these proposers rewrite the harness into an exact algorithm (JavaScript for Opus, Python for Haiku) with the
+solver as a fallback, the paper's "algorithm" class. word_ladder, which needs vocabulary the harness cannot
+compute, improves slowly through solver-plus-search compositions (0.07 -> 0.26 with Opus).
+
+**Multi-hop QA, 6 rounds** (paper QA protocol: 4 proposals per round, 6 feedback and 32 disjoint scoring
+questions, advance to the best candidate; proposer Opus 5.5; 150 held-out questions per benchmark):
+
+| Benchmark | Seed | Peak | Final | HotpotQA-adapted harness |
+|---|---|---|---|---|
+| HotpotQA | 0.453 | 0.560 | 0.547 | 0.547 |
+| MuSiQue | 0.273 | 0.420 | 0.260 | 0.367 |
+| 2WikiMultihopQA | 0.500 | 0.680 | 0.653 | 0.647 |
+
+Gains accumulate over rounds, as in the paper, and the harness adapted on HotpotQA transfers to the two
+benchmarks it never saw. MuSiQue's final round fell from its 0.420 peak: best-of-G advances even to a worse
+candidate, chosen on only 32 noisy scoring questions.
+
+**Agentic versus single-shot proposer** (Haiku 4.5, 8 new families, 3 rounds): 0.249 -> 0.784 agentic versus
+0.246 -> 0.764 single-shot. The agentic pi session fixes some families earlier because it can test revisions on
+feedback questions, at about 3.6 times the proposer cost (`results/agentic-vs-single.md`).
+
+**Outer loop without weight updates** (`results/transfer.md`): a playbook distilled from 47 revision episodes on
+training families raised a weak proposer's (Qwen3-32B) mean held-out gain on 8 unseen families from +0.023 to
++0.101. `tta export` turns runs into GRPO groups (Eq. 8/11 rewards, group advantages) and an SFT corpus with the
+App. B.2 filter, for offline proposer training.
+
+Solver calibration: `results/calibration.md`.
 
 ## Use from pi
 
