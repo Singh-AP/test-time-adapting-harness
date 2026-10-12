@@ -25,9 +25,18 @@ How it uses pi:
   solver), `python()` (guarded subprocess), `search()` (retrieval tasks), `log()`.
 - Solver and proposer models are **pi-ai** models (Amazon Bedrock provider; any pi-ai provider works).
 
-Status: core engine, Bedrock clients, Reasoning Gym tasks and the CLI are implemented. Multi-hop QA, an
-agentic proposer on the pi coding-agent SDK, and a pi package with an `/adapt` command are next (see
-`docs/superpowers/`).
+Components:
+
+- **Engine** (`src/core`): sandboxed harness execution, execution reports, SEARCH/REPLACE edits, static screens,
+  greedy and best-of-G selection, the Eq. 4 loop with artifacts and resume, single-step evaluation, Eq. 8/11
+  rewards and GRPO group advantages.
+- **Proposers**: a single-shot prompt proposer (paper-faithful), and an **agentic proposer** that is a pi
+  coding-agent session editing `harness.js` in a scratch workspace with `check_harness` and `run_feedback`
+  tools (paper App. F future work).
+- **Tasks**: Reasoning Gym families (real `reasoning_gym` generators and verifiers) and multi-hop QA (HotpotQA,
+  MuSiQue, 2WikiMultihopQA) over pooled paragraph corpora with BM25.
+- **pi package**: `adapt_harness` tool, `/adapt` and `/harness-runs` commands, so pi itself runs test-time
+  harness adaptation.
 
 ## Setup
 
@@ -52,11 +61,15 @@ credentials file is refreshed.
     # Single-step: eight independent proposals from the seed, scored on held-out questions
     node src/cli.ts independent --task rg:maze --proposals 8
 
+    # Agentic proposer: a pi coding-agent session that edits, checks and test-runs the harness
+    node src/cli.ts adapt --task rg:word_ladder --proposer-mode agentic --feedback-runs 3
+
     node src/cli.ts families      # Reasoning Gym families
     node src/cli.ts --help        # all options
 
-Task specs: `toy:addition` (offline smoke task) and `rg:<family>` (any Reasoning Gym family; development and
-held-out questions come from disjoint generator seeds).
+Task specs: `toy:addition` (offline smoke task), `rg:<family>` (any Reasoning Gym family; development and
+held-out questions come from disjoint generator seeds), and `qa:hotpotqa|musique|2wiki` (after preparing data,
+see below).
 
 Every run writes `runs/<id>/`:
 
@@ -71,6 +84,36 @@ Every run writes `runs/<id>/`:
 | `final.js`, `summary.{json,md}` | adapted harness and per-round results with token usage and cost |
 
 `*.json` evaluations hold per-question outcomes; `*.traces.jsonl` hold every solver, python and search call.
+
+## Use from pi
+
+The repository is a pi package. Load it for one session, or install it:
+
+    pi -e ./src/pi/extension.ts
+    pi install git:github.com/Singh-AP/test-time-adapting-harness
+
+It adds:
+
+- `adapt_harness` tool: pi's agent can adapt a harness for a task and report held-out scores.
+- `/adapt <task> [--rounds N] [--proposals G] [--protocol rg|qa] [--solver ID] [--proposer ID] [--dev N] [--heldout N]`
+- `/harness-runs`: recent runs with seed and final held-out scores.
+
+Non-interactive example:
+
+    pi -p --no-session --provider amazon-bedrock --model us.anthropic.claude-sonnet-5 --tools adapt_harness \
+      -e ./src/pi/extension.ts "Use adapt_harness on rg:count_primes with 1 round, then report the held-out scores."
+
+## Multi-hop QA data
+
+    for d in hotpotqa musique 2wiki; do mkdir -p data/raw/$d; done
+    curl -L -o data/raw/hotpotqa/validation.parquet https://huggingface.co/api/datasets/hotpotqa/hotpot_qa/parquet/distractor/validation/0.parquet
+    curl -L -o data/raw/musique/validation.parquet https://huggingface.co/api/datasets/dgslibisey/MuSiQue/parquet/default/validation/0.parquet
+    curl -L -o data/raw/2wiki/validation.parquet https://huggingface.co/api/datasets/framolfese/2WikiMultihopQA/parquet/default/validation/0.parquet
+    uv pip install --python .venv/bin/python pyarrow==21.0.0
+    for d in hotpotqa musique 2wiki; do .venv/bin/python -I python/prepare_qa.py $d data/raw/$d/validation.parquet data/qa/$d; done
+
+Each corpus pools the support and distractor paragraphs of the dev split (HotpotQA 66,635, MuSiQue 21,100,
+2Wiki 56,687 paragraphs). Questions are split into disjoint development and held-out sets stratified by type.
 
 ## Writing a harness
 
