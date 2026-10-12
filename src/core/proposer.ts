@@ -57,6 +57,22 @@ export interface ProposeOptions {
 	signal?: AbortSignal;
 }
 
+/** An invalid proposal for a proposer that threw, so one failure does not end the run. */
+export function failedProposal(error: unknown): Proposal {
+	const message = `proposer failed: ${errorMessage(error)}`;
+	return {
+		status: "invalid",
+		reason: message,
+		attempts: 1,
+		parsed: false,
+		applied: false,
+		errors: [message],
+		system: "",
+		transcript: [],
+		usage: emptyUsage(),
+	};
+}
+
 /** Any revision rule: maps a revision context to a proposal. */
 export type ProposeFn = (options: ProposeOptions) => Promise<Proposal>;
 

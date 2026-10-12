@@ -52,6 +52,11 @@ describe("guarded python", () => {
 		expect(result.stderr).toContain("blocked by sandbox: ctypes.dlopen");
 	});
 
+	test("blocks raw process creation through _posixsubprocess", async () => {
+		const result = await run("import _posixsubprocess\n_posixsubprocess.fork_exec()");
+		expect(result.stderr).toContain("blocked by sandbox: _posixsubprocess.fork_exec");
+	});
+
 	test("scrubs the environment", async () => {
 		process.env.AWS_TTA_TEST_ONLY = "should-not-leak";
 		const result = await run("import os\nprint(sorted(k for k in os.environ if 'AWS' in k))");

@@ -3,7 +3,7 @@ import { createRng, shuffle } from "../util/random.ts";
 import { clip, fmt } from "../util/text.ts";
 import type { Budgets, CapabilityDeps } from "./capabilities.ts";
 import { evaluateHarness } from "./executor.ts";
-import { type Proposal, type ProposalStatus, type ProposeFn, propose } from "./proposer.ts";
+import { failedProposal, type Proposal, type ProposalStatus, type ProposeFn, propose } from "./proposer.ts";
 import { buildReport, type RevisionRecord } from "./report.ts";
 import { groupAdvantages, qaReward, rgReward } from "./reward.ts";
 import { screenHarness } from "./screens.ts";
@@ -308,7 +308,7 @@ export async function adapt(p: AdaptParams): Promise<AdaptSummary> {
 					screen,
 					feedback: { task, questions: feedback, deps, concurrency: config.concurrency },
 					signal: p.signal,
-				}),
+				}).catch((error: unknown) => failedProposal(error)),
 			),
 		);
 		if (p.deps.propose) for (const proposal of proposals) meters.proposer.add(proposal.usage);

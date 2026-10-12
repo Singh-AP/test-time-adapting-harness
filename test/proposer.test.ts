@@ -96,6 +96,12 @@ describe("propose", () => {
 		expect(client.requests[0].messages[0].content).toContain("proposal 3 of 8");
 	});
 
+	test("forbids copying development text into the harness, even as examples", async () => {
+		const client = stubProposer(() => "NO_CHANGE: x");
+		await propose({ ...base, client });
+		expect(client.requests[0].system).toContain("not even as examples");
+	});
+
 	test("counts model errors as attempts", async () => {
 		let call = 0;
 		const proposal = await propose({

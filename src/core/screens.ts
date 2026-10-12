@@ -30,7 +30,7 @@ export async function screenHarness(source: string, o: ScreenOptions): Promise<S
 	if (answer !== undefined) {
 		return {
 			ok: false,
-			reason: `The harness contains the expected answer ${JSON.stringify(clip(answer, 80))} of a development question. Do not hard-code answers: the harness is evaluated on unseen questions.`,
+			reason: `The harness contains the expected answer ${JSON.stringify(clip(answer, 80))} of a development question. Do not hard-code answers or quote development answers as examples: the harness is evaluated on unseen questions.`,
 		};
 	}
 	if (containsQuestionSpecificText(source, o.shownQuestions ?? [])) {

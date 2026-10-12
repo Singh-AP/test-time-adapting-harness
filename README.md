@@ -157,7 +157,10 @@ Proposer-written harness code runs only inside QuickJS (no filesystem, network, 
 Python runs through `python/guard.py`: scrubbed environment (no AWS variables), temp working directory, resource
 limits, and an audit hook that blocks sockets, subprocesses, native library loading and file access outside the
 scratch directory and the Python installation. This is defense in depth, not a security boundary; use a container
-for untrusted settings.
+for untrusted settings. On macOS the guard also sets RLIMIT_NPROC to 0; on Linux it relies on the audit hook and on
+disabling `_posixsubprocess.fork_exec`, so prefer a container there.
+
+The agentic proposer's file tools are restricted to its scratch workspace (pi's `@` and `~` path forms included).
 
 ## Test
 

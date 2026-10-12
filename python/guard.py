@@ -36,6 +36,19 @@ def _limit(kind, value):
         pass
 
 
+def _disable_raw_spawn():
+    """_posixsubprocess.fork_exec creates processes without raising an audit event; replace it."""
+    try:
+        import _posixsubprocess
+    except ImportError:
+        return
+
+    def blocked(*args, **kwargs):
+        raise PermissionError("blocked by sandbox: _posixsubprocess.fork_exec")
+
+    _posixsubprocess.fork_exec = blocked
+
+
 def _install(scratch):
     roots = {sys.prefix, sys.base_prefix, sys.exec_prefix, sys.base_exec_prefix, *sys.path}
     read_roots = tuple(sorted({os.path.realpath(r) for r in roots if r} | {scratch}))
@@ -94,6 +107,8 @@ def main():
     os.chdir(scratch)
     code = compile(source, "solver.py", "exec")
     import ctypes  # noqa: F401  # preload before the hook; see BLOCKED_MODULES
+
+    _disable_raw_spawn()
 
     _install(scratch)
     sys.argv = ["solver.py"]

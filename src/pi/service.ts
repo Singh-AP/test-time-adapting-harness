@@ -1,5 +1,11 @@
 import { readFile } from "node:fs/promises";
-import { DEFAULT_PROPOSER_MODEL, DEFAULT_SOLVER_MODEL, defaultPythonPath, repoPath } from "../config.ts";
+import {
+	DEFAULT_PROPOSER_MODEL,
+	DEFAULT_SOLVER_MODEL,
+	defaultPythonPath,
+	defaultSeedFile,
+	repoPath,
+} from "../config.ts";
 import { DEFAULT_BUDGETS } from "../core/capabilities.ts";
 import { type AdaptSummary, adapt, QA_PROTOCOL, REASONING_GYM_PROTOCOL } from "../core/loop.ts";
 import { createBedrockModels, PiProposerClient, PiSolverClient, requireModel } from "../llm/pi-clients.ts";
@@ -49,8 +55,7 @@ export function createAdaptService(): AdaptService {
 					reasoning: reasoning === "off" ? undefined : reasoning,
 				});
 				const preset = request.protocol === "qa" ? QA_PROTOCOL : REASONING_GYM_PROTOCOL;
-				const defaultSeed = task.name.startsWith("qa:") ? "qa-seed.js" : "rg-seed.js";
-				const seedSource = await readFile(request.seedHarness ?? repoPath("seeds", defaultSeed), "utf8");
+				const seedSource = await readFile(request.seedHarness ?? defaultSeedFile(task.name), "utf8");
 				const time = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
 				return await adapt({
 					task,

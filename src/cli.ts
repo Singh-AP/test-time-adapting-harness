@@ -3,7 +3,13 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
-import { DEFAULT_PROPOSER_MODEL, DEFAULT_SOLVER_MODEL, defaultPythonPath, repoPath } from "./config.ts";
+import {
+	DEFAULT_PROPOSER_MODEL,
+	DEFAULT_SOLVER_MODEL,
+	defaultPythonPath,
+	defaultSeedFile,
+	repoPath,
+} from "./config.ts";
 import { type Budgets, DEFAULT_BUDGETS } from "./core/capabilities.ts";
 import { evaluateHarness } from "./core/executor.ts";
 import { independentRevisions } from "./core/independent.ts";
@@ -234,7 +240,7 @@ async function main(): Promise<void> {
 			onRetry: (attempt, message) => log(`proposer retry ${attempt}: ${message.slice(0, 160)}`),
 		});
 		const playbook = values.playbook ? await readFile(values.playbook, "utf8") : undefined;
-		const seedSource = await readFile(values["seed-harness"] ?? repoPath("seeds", "rg-seed.js"), "utf8");
+		const seedSource = await readFile(values["seed-harness"] ?? defaultSeedFile(task.name), "utf8");
 		const runDir = values["run-dir"] ?? defaultRunDir(command, spec);
 		const preset = values.protocol === "qa" ? QA_PROTOCOL : REASONING_GYM_PROTOCOL;
 		const seed = integer(values.seed, 1);

@@ -12,7 +12,7 @@ import {
 	renderUsage,
 	summarizeProposal,
 } from "./loop.ts";
-import { type ProposalStatus, type ProposeFn, propose } from "./proposer.ts";
+import { failedProposal, type ProposalStatus, type ProposeFn, propose } from "./proposer.ts";
 import { buildReport } from "./report.ts";
 import { screenHarness } from "./screens.ts";
 import { RunStore } from "./store.ts";
@@ -143,7 +143,7 @@ export async function independentRevisions(p: IndependentParams): Promise<Indepe
 				screen: (source) => screenHarness(source, { maxLines: config.maxLines, shownQuestions, shownAnswers }),
 				feedback: { task, questions: feedback, deps, concurrency: config.concurrency },
 				signal: p.signal,
-			}),
+			}).catch((error: unknown) => failedProposal(error)),
 		),
 	);
 	if (p.deps.propose) for (const proposal of proposals) meters.proposer.add(proposal.usage);

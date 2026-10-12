@@ -6,7 +6,7 @@ import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { describe, expect, test } from "vitest";
 import { DEFAULT_BUDGETS } from "../src/core/capabilities.ts";
 import { screenHarness } from "../src/core/screens.ts";
-import { createAgenticProposer, guardPath } from "../src/proposers/agentic.ts";
+import { agenticSystemPrompt, createAgenticProposer, guardPath } from "../src/proposers/agentic.ts";
 import { createArithmeticTask } from "../src/tasks/toy.ts";
 import { stubPython, stubSolver, sumInPrompt } from "./helpers.ts";
 
@@ -83,6 +83,17 @@ describe("agentic proposer", () => {
 		expect(() => guardPath("/tmp/ws", "../etc/passwd")).toThrow("outside the workspace");
 		expect(() => guardPath("/tmp/ws", "/etc/passwd")).toThrow("outside the workspace");
 		expect(guardPath("/tmp/ws", "harness.js")).toBe("/tmp/ws/harness.js");
+	});
+
+	test("blocks pi's @ and ~ path forms that escape the workspace", () => {
+		expect(() => guardPath("/tmp/ws", "@/etc/passwd")).toThrow("outside the workspace");
+		expect(() => guardPath("/tmp/ws", "~/.aws/credentials")).toThrow("outside the workspace");
+		expect(() => guardPath("/tmp/ws", "~")).toThrow("outside the workspace");
+		expect(guardPath("/tmp/ws", "@harness.js")).toBe("/tmp/ws/harness.js");
+	});
+
+	test("agentic system prompt forbids copying development text, even as examples", () => {
+		expect(agenticSystemPrompt(options(), 3)).toContain("not even as examples");
 	});
 
 	test("times out", async () => {

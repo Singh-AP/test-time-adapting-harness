@@ -16,5 +16,10 @@ export function defaultPythonPath(): string {
 	return existsSync(venv) ? venv : "python3";
 }
 
+/** Seed harness for a task spec: the two-hop retrieval seed for QA tasks, the one-call seed otherwise. */
+export function defaultSeedFile(taskName: string): string {
+	return repoPath("seeds", taskName.startsWith("qa:") ? "qa-seed.js" : "rg-seed.js");
+}
+
 export const DEFAULT_PROPOSER_MODEL = "us.anthropic.claude-opus-5-5";
 export const DEFAULT_SOLVER_MODEL = "qwen.qwen3-32b-v1:0";

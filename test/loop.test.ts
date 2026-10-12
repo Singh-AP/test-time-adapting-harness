@@ -222,3 +222,25 @@ describe("pluggable proposers", () => {
 		expect(summary.rounds[0].selection.reason).toContain("perfect");
 	});
 });
+
+describe("proposer failures", () => {
+	test("a throwing proposer invalidates its proposal without failing the run", async () => {
+		const task = createArithmeticTask({ dev: 3, heldout: 2, seed: 23 });
+		const runDir = await mkdtemp(join(tmpdir(), "tta-loop-"));
+		const summary = await adapt({
+			task,
+			seedSource: SEED,
+			config: config({ rounds: 1 }),
+			deps: {
+				solver: solver(),
+				python: stubPython(),
+				propose: async () => {
+					throw new Error("session setup failed");
+				},
+			},
+			runDir,
+		});
+		expect(summary.rounds[0].candidates[0].status).toBe("invalid");
+		expect(summary.rounds[0].candidates[0].reason).toContain("session setup failed");
+	});
+});

@@ -40,7 +40,7 @@ You receive the task description, the current harness with its development score
 
 Rules:
 - Keep the entry point \`async function solve(question)\`. It must return the final answer as a string in exactly the format the task expects.
-- Do not hard-code answers or special-case particular development questions. The revised harness is evaluated on unseen questions.
+- Do not hard-code answers or special-case particular development questions. Do not copy text from development questions or their expected answers into the harness, not even as examples in prompts; write your own made-up examples. The revised harness is evaluated on unseen questions.
 - Stay within the per-question budgets. Calls beyond a budget throw an error.
 - Keep the harness under ${o.maxLines} lines.
 

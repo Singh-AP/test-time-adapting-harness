@@ -1,5 +1,5 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { type Api, type Model, type ThinkingLevel, Type } from "@earendil-works/pi-ai";
 import {
@@ -37,7 +37,11 @@ export interface AgenticProposerOptions {
 
 /** Resolves a tool path inside the workspace or throws. */
 export function guardPath(workspace: string, path: string): string {
-	const target = resolve(workspace, path);
+	// pi's file tools strip a leading "@" and expand "~" before opening a path, so check that same path.
+	let opened = path.trim();
+	if (opened.startsWith("@")) opened = opened.slice(1);
+	if (opened === "~" || opened.startsWith("~/")) opened = join(homedir(), opened.slice(1));
+	const target = resolve(workspace, opened);
 	const rel = relative(workspace, target);
 	if (rel.startsWith("..") || isAbsolute(rel))
 		throw new Error(`${path} is outside the workspace; only workspace files are available`);
@@ -62,7 +66,7 @@ ${feedback}
 
 Rules:
 - Keep the entry point \`async function solve(question)\`; it must return the final answer as a string in exactly the format the task expects.
-- Do not hard-code answers or special-case particular development questions. The harness is evaluated on unseen questions.
+- Do not hard-code answers or special-case particular development questions. Do not copy text from development questions or their expected answers into the harness, not even as examples in prompts; write your own made-up examples. The harness is evaluated on unseen questions.
 - Keep harness.js under ${o.maxLines} lines.
 
 Process: read REPORT.md and harness.js, diagnose the failures, edit harness.js, run check_harness, and use run_feedback to test the change when it is available. Stop when the harness is better or the budget is spent.
@@ -134,159 +138,172 @@ export function createAgenticProposer(a: AgenticProposerOptions): ProposeFn {
 	const maxFeedbackRuns = a.maxFeedbackRuns ?? 3;
 	return async (o): Promise<Proposal> => {
 		const workspace = await mkdtemp(join(tmpdir(), "tta-agentic-"));
-		const harnessPath = join(workspace, "harness.js");
-		const parent = o.parentSource.replace(/\r\n/g, "\n");
-		await writeFile(harnessPath, parent);
-		await writeFile(
-			join(workspace, "REPORT.md"),
-			`# Development score ${fmt(o.parentScore)} on ${o.feedbackSize} questions\n\n${o.report}\n`,
-		);
-		await writeFile(join(workspace, "TASK.md"), taskFile(o));
-		if (o.playbook)
-			await writeFile(
-				join(workspace, "PLAYBOOK.md"),
-				`# Lessons from previous adaptations (other tasks)\n\n${o.playbook.trim()}\n`,
-			);
-		const system = agenticSystemPrompt(o, maxFeedbackRuns);
-		const errors: string[] = [];
-		let feedbackRuns = 0;
-
-		const check = defineTool({
-			name: "check_harness",
-			label: "Check harness",
-			description:
-				"Validate harness.js: it must load in the sandbox, define solve, stay under the line limit, and contain no hard-coded development answers.",
-			parameters: Type.Object({}),
-			execute: async () => {
-				const result = await o.screen(await readFile(harnessPath, "utf8"));
-				return {
-					content: [
-						{ type: "text", text: result.ok ? "OK: harness.js passes all checks." : `FAILED: ${result.reason}` },
-					],
-					details: undefined,
-				};
-			},
-		});
-		const tools: ToolDefinition<any, any, any>[] = [
-			guarded(workspace, createReadToolDefinition(workspace)),
-			guarded(workspace, createEditToolDefinition(workspace)),
-			guarded(workspace, createWriteToolDefinition(workspace)),
-			check,
-		];
-		const feedback = o.feedback;
-		if (feedback) {
-			tools.push(
-				defineTool({
-					name: "run_feedback",
-					label: "Run feedback questions",
-					description: `Run the current harness.js on the ${feedback.questions.length} development questions behind REPORT.md and return its score and an execution report of failures. At most ${maxFeedbackRuns} runs.`,
-					parameters: Type.Object({}),
-					execute: async (_id, _params, signal) => {
-						if (feedbackRuns >= maxFeedbackRuns)
-							throw new Error(`run_feedback limit reached (${maxFeedbackRuns} runs)`);
-						const source = await readFile(harnessPath, "utf8");
-						const screened = await o.screen(source);
-						if (!screened.ok) throw new Error(`harness.js does not pass check_harness: ${screened.reason}`);
-						feedbackRuns++;
-						const result = await evaluateHarness({
-							task: feedback.task,
-							source,
-							questions: feedback.questions,
-							label: `agentic-feedback-${feedbackRuns}`,
-							deps: feedback.deps,
-							budgets: o.budgets,
-							concurrency: feedback.concurrency,
-							signal,
-						});
-						const report = buildReport({
-							task: feedback.task,
-							result,
-							questions: feedback.questions,
-							currentSource: source,
-							history: [],
-							maxFailures: 6,
-							maxPasses: 1,
-						});
-						return {
-							content: [
-								{
-									type: "text",
-									text: `Run ${feedbackRuns}/${maxFeedbackRuns}: score ${fmt(result.mean)} (parent ${fmt(o.parentScore)}).\n\n${report}`,
-								},
-							],
-							details: undefined,
-						};
-					},
-				}),
-			);
-		}
-
-		const branch = o.branch
-			? `\n\nYou are proposal ${o.branch.index + 1} of ${o.branch.total} sampled independently; pursue option number ${o.branch.index + 1} in your own ranking of promising changes.`
-			: "";
-		const { session } = await createAgentSession({
-			cwd: workspace,
-			agentDir: join(workspace, ".pi"),
-			modelRuntime: a.runtime,
-			model: a.model,
-			thinkingLevel: a.thinkingLevel === "off" ? undefined : (a.thinkingLevel ?? "medium"),
-			noTools: "builtin",
-			tools: tools.map((t) => t.name),
-			customTools: tools,
-			resourceLoader: minimalResources(system),
-			sessionManager: SessionManager.inMemory(workspace),
-			settingsManager: SettingsManager.inMemory({
-				compaction: { enabled: false },
-				retry: { enabled: true, maxRetries: 3 },
-			}),
-		});
-		const timer = setTimeout(() => {
-			errors.push(`agentic proposer timed out after ${a.timeoutMs ?? 1_200_000} ms`);
-			void session.abort();
-		}, a.timeoutMs ?? 1_200_000);
 		try {
-			await session.prompt(
-				`Improve harness.js for task ${o.task.name}. Its development score is ${fmt(o.parentScore)} on ${o.feedbackSize} questions; REPORT.md has the execution report.${branch}`,
-			);
-		} catch (error) {
-			errors.push(`agent session error: ${errorMessage(error)}`);
+			return await proposeInWorkspace(a, o, workspace, maxFeedbackRuns);
 		} finally {
-			clearTimeout(timer);
+			if (!a.keepWorkspace) await rm(workspace, { recursive: true, force: true });
 		}
-		const finalText = session.getLastAssistantText() ?? "";
-		const stats = session.getSessionStats();
-		const transcript = renderMessages(session.messages);
-		session.dispose();
-		const finalSource = (await readFile(harnessPath, "utf8")).replace(/\r\n/g, "\n");
-		if (!a.keepWorkspace) await rm(workspace, { recursive: true, force: true });
-
-		const base = {
-			attempts: 1,
-			parsed: true,
-			errors,
-			system,
-			transcript,
-			usage: {
-				input: stats.tokens.input + stats.tokens.cacheRead + stats.tokens.cacheWrite,
-				output: stats.tokens.output,
-				cost: stats.cost,
-			},
-			diagnosis: extractSection(finalText, ["diagnosis"]),
-			manifest: extractSection(finalText, ["change manifest", "manifest"]),
-		};
-		if (finalSource === parent) {
-			const declared = /NO_CHANGE\s*[:\-—]?\s*(.*)/.exec(finalText)?.[1]?.trim();
-			return {
-				...base,
-				status: "no_change",
-				applied: false,
-				reason: declared || "the agent left harness.js unchanged",
-			};
-		}
-		const screened = await o.screen(finalSource);
-		if (!screened.ok) return { ...base, status: "invalid", applied: false, reason: screened.reason };
-		return { ...base, status: "edit", applied: true, source: finalSource };
 	};
+}
+
+/** One agentic proposal in an existing workspace; the caller removes the workspace. */
+async function proposeInWorkspace(
+	a: AgenticProposerOptions,
+	o: ProposeOptions,
+	workspace: string,
+	maxFeedbackRuns: number,
+): Promise<Proposal> {
+	const harnessPath = join(workspace, "harness.js");
+	const parent = o.parentSource.replace(/\r\n/g, "\n");
+	await writeFile(harnessPath, parent);
+	await writeFile(
+		join(workspace, "REPORT.md"),
+		`# Development score ${fmt(o.parentScore)} on ${o.feedbackSize} questions\n\n${o.report}\n`,
+	);
+	await writeFile(join(workspace, "TASK.md"), taskFile(o));
+	if (o.playbook)
+		await writeFile(
+			join(workspace, "PLAYBOOK.md"),
+			`# Lessons from previous adaptations (other tasks)\n\n${o.playbook.trim()}\n`,
+		);
+	const system = agenticSystemPrompt(o, maxFeedbackRuns);
+	const errors: string[] = [];
+	let feedbackRuns = 0;
+
+	const check = defineTool({
+		name: "check_harness",
+		label: "Check harness",
+		description:
+			"Validate harness.js: it must load in the sandbox, define solve, stay under the line limit, and contain no hard-coded development answers.",
+		parameters: Type.Object({}),
+		execute: async () => {
+			const result = await o.screen(await readFile(harnessPath, "utf8"));
+			return {
+				content: [
+					{ type: "text", text: result.ok ? "OK: harness.js passes all checks." : `FAILED: ${result.reason}` },
+				],
+				details: undefined,
+			};
+		},
+	});
+	const tools: ToolDefinition<any, any, any>[] = [
+		guarded(workspace, createReadToolDefinition(workspace)),
+		guarded(workspace, createEditToolDefinition(workspace)),
+		guarded(workspace, createWriteToolDefinition(workspace)),
+		check,
+	];
+	const feedback = o.feedback;
+	if (feedback) {
+		tools.push(
+			defineTool({
+				name: "run_feedback",
+				label: "Run feedback questions",
+				description: `Run the current harness.js on the ${feedback.questions.length} development questions behind REPORT.md and return its score and an execution report of failures. At most ${maxFeedbackRuns} runs.`,
+				parameters: Type.Object({}),
+				execute: async (_id, _params, signal) => {
+					if (feedbackRuns >= maxFeedbackRuns)
+						throw new Error(`run_feedback limit reached (${maxFeedbackRuns} runs)`);
+					const source = await readFile(harnessPath, "utf8");
+					const screened = await o.screen(source);
+					if (!screened.ok) throw new Error(`harness.js does not pass check_harness: ${screened.reason}`);
+					feedbackRuns++;
+					const result = await evaluateHarness({
+						task: feedback.task,
+						source,
+						questions: feedback.questions,
+						label: `agentic-feedback-${feedbackRuns}`,
+						deps: feedback.deps,
+						budgets: o.budgets,
+						concurrency: feedback.concurrency,
+						signal,
+					});
+					const report = buildReport({
+						task: feedback.task,
+						result,
+						questions: feedback.questions,
+						currentSource: source,
+						history: [],
+						maxFailures: 6,
+						maxPasses: 1,
+					});
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Run ${feedbackRuns}/${maxFeedbackRuns}: score ${fmt(result.mean)} (parent ${fmt(o.parentScore)}).\n\n${report}`,
+							},
+						],
+						details: undefined,
+					};
+				},
+			}),
+		);
+	}
+
+	const branch = o.branch
+		? `\n\nYou are proposal ${o.branch.index + 1} of ${o.branch.total} sampled independently; pursue option number ${o.branch.index + 1} in your own ranking of promising changes.`
+		: "";
+	const { session } = await createAgentSession({
+		cwd: workspace,
+		agentDir: join(workspace, ".pi"),
+		modelRuntime: a.runtime,
+		model: a.model,
+		thinkingLevel: a.thinkingLevel === "off" ? undefined : (a.thinkingLevel ?? "medium"),
+		noTools: "builtin",
+		tools: tools.map((t) => t.name),
+		customTools: tools,
+		resourceLoader: minimalResources(system),
+		sessionManager: SessionManager.inMemory(workspace),
+		settingsManager: SettingsManager.inMemory({
+			compaction: { enabled: false },
+			retry: { enabled: true, maxRetries: 3 },
+		}),
+	});
+	const timer = setTimeout(() => {
+		errors.push(`agentic proposer timed out after ${a.timeoutMs ?? 1_200_000} ms`);
+		void session.abort();
+	}, a.timeoutMs ?? 1_200_000);
+	try {
+		await session.prompt(
+			`Improve harness.js for task ${o.task.name}. Its development score is ${fmt(o.parentScore)} on ${o.feedbackSize} questions; REPORT.md has the execution report.${branch}`,
+		);
+	} catch (error) {
+		errors.push(`agent session error: ${errorMessage(error)}`);
+	} finally {
+		clearTimeout(timer);
+	}
+	const finalText = session.getLastAssistantText() ?? "";
+	const stats = session.getSessionStats();
+	const transcript = renderMessages(session.messages);
+	session.dispose();
+	const finalSource = (await readFile(harnessPath, "utf8")).replace(/\r\n/g, "\n");
+
+	const base = {
+		attempts: 1,
+		parsed: true,
+		errors,
+		system,
+		transcript,
+		usage: {
+			input: stats.tokens.input + stats.tokens.cacheRead + stats.tokens.cacheWrite,
+			output: stats.tokens.output,
+			cost: stats.cost,
+		},
+		diagnosis: extractSection(finalText, ["diagnosis"]),
+		manifest: extractSection(finalText, ["change manifest", "manifest"]),
+	};
+	if (finalSource === parent) {
+		const declared = /NO_CHANGE\s*[:\-—]?\s*(.*)/.exec(finalText)?.[1]?.trim();
+		return {
+			...base,
+			status: "no_change",
+			applied: false,
+			reason: declared || "the agent left harness.js unchanged",
+		};
+	}
+	const screened = await o.screen(finalSource);
+	if (!screened.ok) return { ...base, status: "invalid", applied: false, reason: screened.reason };
+	return { ...base, status: "edit", applied: true, source: finalSource };
 }
 
 /** Agentic proposer on a Bedrock model, with a pi model runtime stored under `agentDir`. */
