@@ -8,6 +8,7 @@ import { type Budgets, DEFAULT_BUDGETS } from "./core/capabilities.ts";
 import { evaluateHarness } from "./core/executor.ts";
 import { independentRevisions } from "./core/independent.ts";
 import { type AdaptConfig, adapt, QA_PROTOCOL, REASONING_GYM_PROTOCOL, renderUsage } from "./core/loop.ts";
+import { exportLearningData } from "./learning/export.ts";
 import { createBedrockModels, PiProposerClient, PiSolverClient, requireModel } from "./llm/pi-clients.ts";
 import { createBedrockAgenticProposer } from "./proposers/agentic.ts";
 import { ReasoningGymBridge } from "./tasks/reasoning-gym/bridge.ts";
@@ -23,6 +24,7 @@ Usage:
   tta independent --task <spec> [options]  Sample independent single-step revisions of the seed
   tta eval --task <spec> --harness <file>  Score a harness on dev and held-out questions
   tta families                             List Reasoning Gym families
+  tta export --out <dir> <run-dir>...      Export GRPO rollout groups and an SFT corpus from runs
 
 Task specs: toy:addition, rg:<family>
 
@@ -84,6 +86,7 @@ const OPTIONS = {
 	"proposer-mode": { type: "string" },
 	"feedback-runs": { type: "string" },
 	"agent-timeout": { type: "string" },
+	out: { type: "string" },
 	"run-dir": { type: "string" },
 	seed: { type: "string" },
 	help: { type: "boolean", short: "h" },
@@ -134,6 +137,14 @@ async function main(): Promise<void> {
 		} finally {
 			await bridge.close();
 		}
+		return;
+	}
+	if (command === "export") {
+		const out = values.out ?? repoPath("data", "learning");
+		const counts = await exportLearningData(positionals.slice(1), out);
+		process.stdout.write(
+			`${counts.groups} groups, ${counts.candidates} candidates, ${counts.sft} SFT examples -> ${out}\n`,
+		);
 		return;
 	}
 	if (!["adapt", "independent", "eval"].includes(command))
