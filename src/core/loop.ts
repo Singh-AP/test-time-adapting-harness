@@ -3,7 +3,7 @@ import { createRng, shuffle } from "../util/random.ts";
 import { clip, fmt } from "../util/text.ts";
 import type { Budgets, CapabilityDeps } from "./capabilities.ts";
 import { evaluateHarness } from "./executor.ts";
-import { type Proposal, type ProposalStatus, propose } from "./proposer.ts";
+import { type Proposal, type ProposalStatus, type ProposeFn, propose } from "./proposer.ts";
 import { buildReport, type RevisionRecord } from "./report.ts";
 import { groupAdvantages, qaReward, rgReward } from "./reward.ts";
 import { screenHarness } from "./screens.ts";
@@ -32,6 +32,8 @@ export interface AdaptConfig {
 	evaluateHeldout: boolean;
 	branchHints: boolean;
 	reward: "rg" | "qa";
+	/** Greedy protocol only: sample nothing when the parent already scores 1.0 on the scoring set. */
+	skipPerfect?: boolean;
 }
 
 export type ProtocolPreset = Omit<AdaptConfig, "budgets" | "concurrency" | "seed">;
@@ -49,6 +51,7 @@ export const REASONING_GYM_PROTOCOL: ProtocolPreset = {
 	evaluateHeldout: true,
 	branchHints: false,
 	reward: "rg",
+	skipPerfect: true,
 };
 
 /** Multi-hop QA protocol (App. D.3): eight proposals, 6 feedback and 64 disjoint scoring questions, advance to the best. */
@@ -64,11 +67,15 @@ export const QA_PROTOCOL: ProtocolPreset = {
 	evaluateHeldout: true,
 	branchHints: false,
 	reward: "qa",
+	skipPerfect: false,
 };
 
 export interface AdaptDeps {
 	solver: SolverClient;
-	proposer: ProposerClient;
+	/** Model for the default single-shot proposer. */
+	proposer?: ProposerClient;
+	/** Alternative revision rule, for example the agentic proposer. */
+	propose?: ProposeFn;
 	python?: PythonRunner;
 }
 
@@ -183,7 +190,8 @@ export async function adapt(p: AdaptParams): Promise<AdaptSummary> {
 		python: p.deps.python,
 		search: task.search,
 	};
-	const proposer = meterProposer(p.deps.proposer, meters.proposer);
+	const proposer = p.deps.proposer ? meterProposer(p.deps.proposer, meters.proposer) : undefined;
+	const proposeFn: ProposeFn = p.deps.propose ?? propose;
 	const run = (source: string, questions: readonly Question[], label: string) =>
 		evaluateHarness({
 			task,
@@ -275,13 +283,14 @@ export async function adapt(p: AdaptParams): Promise<AdaptSummary> {
 		const shownAnswers = [...state.shownAnswers];
 		const screen = (source: string) =>
 			screenHarness(source, { maxLines: config.maxLines, shownQuestions, shownAnswers });
+		const perfect = config.protocol === "greedy" && config.skipPerfect === true && parentScoreEval.mean >= 1 - 1e-9;
 		log(
-			`round ${round}: parent ${parentHash} feedback ${fmt(feedbackEval.mean)} (${feedback.length}q), scoring ${fmt(parentScoreEval.mean)} (${scoring.length}q); sampling ${config.proposals} proposal(s)`,
+			`round ${round}: parent ${parentHash} feedback ${fmt(feedbackEval.mean)} (${feedback.length}q), scoring ${fmt(parentScoreEval.mean)} (${scoring.length}q); sampling ${perfect ? 0 : config.proposals} proposal(s)`,
 		);
 
 		const proposals = await Promise.all(
-			Array.from({ length: config.proposals }, (_, index) =>
-				propose({
+			Array.from({ length: perfect ? 0 : config.proposals }, (_, index) =>
+				proposeFn({
 					client: proposer,
 					task,
 					capabilities: task.capabilities,
@@ -294,10 +303,12 @@ export async function adapt(p: AdaptParams): Promise<AdaptSummary> {
 					attempts: config.attempts,
 					branch: config.branchHints && config.proposals > 1 ? { index, total: config.proposals } : undefined,
 					screen,
+					feedback: { task, questions: feedback, deps, concurrency: config.concurrency },
 					signal: p.signal,
 				}),
 			),
 		);
+		if (p.deps.propose) for (const proposal of proposals) meters.proposer.add(proposal.usage);
 
 		const roundEvals = new Map<string, Promise<EvalResult>>();
 		const scored = await Promise.all(
@@ -351,11 +362,18 @@ export async function adapt(p: AdaptParams): Promise<AdaptSummary> {
 			}),
 		);
 
-		const selection = selectNext(
-			config.protocol,
-			{ source: parentSource, score: parentScoreEval.mean },
-			scored.map((s) => s.candidate),
-		);
+		const selection = perfect
+			? {
+					source: parentSource,
+					score: parentScoreEval.mean,
+					chosen: null,
+					reason: `parent is perfect on the scoring set (${fmt(parentScoreEval.mean)}); no proposals sampled`,
+				}
+			: selectNext(
+					config.protocol,
+					{ source: parentSource, score: parentScoreEval.mean },
+					scored.map((s) => s.candidate),
+				);
 		const rewards = scored.map(({ proposal, candidate }) =>
 			config.reward === "rg"
 				? rgReward({

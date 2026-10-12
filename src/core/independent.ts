@@ -12,7 +12,7 @@ import {
 	renderUsage,
 	summarizeProposal,
 } from "./loop.ts";
-import { type ProposalStatus, propose } from "./proposer.ts";
+import { type ProposalStatus, type ProposeFn, propose } from "./proposer.ts";
 import { buildReport } from "./report.ts";
 import { screenHarness } from "./screens.ts";
 import { RunStore } from "./store.ts";
@@ -76,7 +76,8 @@ export async function independentRevisions(p: IndependentParams): Promise<Indepe
 		python: p.deps.python,
 		search: task.search,
 	};
-	const proposer = meterProposer(p.deps.proposer, meters.proposer);
+	const proposer = p.deps.proposer ? meterProposer(p.deps.proposer, meters.proposer) : undefined;
+	const proposeFn: ProposeFn = p.deps.propose ?? propose;
 	const run = (source: string, label: string, questions = task.heldout) =>
 		evaluateHarness({
 			task,
@@ -125,7 +126,7 @@ export async function independentRevisions(p: IndependentParams): Promise<Indepe
 
 	const proposals = await Promise.all(
 		Array.from({ length: p.proposals }, (_, index) =>
-			propose({
+			proposeFn({
 				client: proposer,
 				task,
 				capabilities: task.capabilities,
@@ -138,10 +139,12 @@ export async function independentRevisions(p: IndependentParams): Promise<Indepe
 				attempts: config.attempts,
 				branch: config.branchHints && p.proposals > 1 ? { index, total: p.proposals } : undefined,
 				screen: (source) => screenHarness(source, { maxLines: config.maxLines, shownQuestions, shownAnswers }),
+				feedback: { task, questions: feedback, deps, concurrency: config.concurrency },
 				signal: p.signal,
 			}),
 		),
 	);
+	if (p.deps.propose) for (const proposal of proposals) meters.proposer.add(proposal.usage);
 	const results = await Promise.all(
 		proposals.map(async (proposal, index): Promise<IndependentProposal> => {
 			const dir = `proposals/p${index}`;

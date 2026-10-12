@@ -117,7 +117,8 @@ export function applyEdits(source: string, blocks: readonly EditBlock[]): ApplyR
 	return { ok: true, source: current };
 }
 
-function extractSection(text: string, names: readonly string[]): string | undefined {
+/** Body of the first markdown section whose heading starts with one of `names`. */
+export function extractSection(text: string, names: readonly string[]): string | undefined {
 	const lines = text.split("\n");
 	for (let i = 0; i < lines.length; i++) {
 		const heading = /^#{1,6}\s+(.*)$/.exec(lines[i]);

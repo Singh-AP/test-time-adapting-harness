@@ -50,9 +50,9 @@ describe("adapt", () => {
 		expect(summary.seedHeldout).toBe(0);
 		expect(summary.rounds[0].selection.chosen).toBe(0);
 		expect(summary.rounds[0].heldout).toBe(1);
-		expect(summary.rounds[1].candidates[0].status).toBe("no_change");
+		expect(summary.rounds[1].candidates).toEqual([]);
 		expect(summary.finalHeldout).toBe(1);
-		expect(summary.usage.proposer.calls).toBe(2);
+		expect(summary.usage.proposer.calls).toBe(1);
 		expect(await readFile(join(runDir, "final.js"), "utf8")).toContain("CAREFUL");
 		const round1 = JSON.parse(await readFile(join(runDir, "round-01", "round.json"), "utf8"));
 		expect(round1.candidates[0].score).toBe(1);
@@ -164,5 +164,55 @@ describe("independentRevisions", () => {
 		expect(summary.aboveSeed).toBeCloseTo(0.5);
 		expect(summary.failedRate).toBeCloseTo(0.5);
 		expect(proposer.requests[1].messages[0].content).toContain("proposal 2 of 2");
+	});
+});
+
+describe("pluggable proposers", () => {
+	test("passes feedback context and meters proposal usage", async () => {
+		const task = createArithmeticTask({ dev: 4, heldout: 3, seed: 21 });
+		const runDir = await mkdtemp(join(tmpdir(), "tta-loop-"));
+		const seen: string[][] = [];
+		const summary = await adapt({
+			task,
+			seedSource: SEED,
+			config: config({ rounds: 1 }),
+			deps: {
+				solver: solver(),
+				python: stubPython(),
+				propose: async (options) => {
+					seen.push((options.feedback?.questions ?? []).map((q) => q.id));
+					return {
+						status: "no_change",
+						reason: "custom",
+						attempts: 1,
+						parsed: true,
+						applied: false,
+						errors: [],
+						system: "",
+						transcript: [],
+						usage: { input: 7, output: 3, cost: 0.5 },
+					};
+				},
+			},
+			runDir,
+		});
+		expect(seen).toEqual([task.dev.map((q) => q.id)]);
+		expect(summary.usage.proposer).toMatchObject({ input: 7, output: 3, cost: 0.5, calls: 1 });
+	});
+
+	test("skips proposals when the parent is perfect", async () => {
+		const task = createArithmeticTask({ dev: 4, heldout: 3, seed: 22 });
+		const runDir = await mkdtemp(join(tmpdir(), "tta-loop-"));
+		const proposer = stubProposer(() => IMPROVE);
+		const summary = await adapt({
+			task,
+			seedSource: SEED.replace("await llm(question)", 'await llm({ system: "CAREFUL", prompt: question })'),
+			config: config({ rounds: 2 }),
+			deps: { solver: solver(), proposer, python: stubPython() },
+			runDir,
+		});
+		expect(proposer.requests).toHaveLength(0);
+		expect(summary.rounds[0].candidates).toEqual([]);
+		expect(summary.rounds[0].selection.reason).toContain("perfect");
 	});
 });

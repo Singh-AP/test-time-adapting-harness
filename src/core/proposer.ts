@@ -1,9 +1,9 @@
 import { errorMessage } from "../util/text.ts";
-import type { Budgets } from "./capabilities.ts";
+import type { Budgets, CapabilityDeps } from "./capabilities.ts";
 import { applyEdits, parseProposal } from "./edits.ts";
 import { proposerSystemPrompt, retryPrompt, revisionPrompt } from "./prompts.ts";
 import type { ScreenResult } from "./screens.ts";
-import type { CapabilityName, ProposerClient, SolverMessage, TaskInfo, Usage } from "./types.ts";
+import type { CapabilityName, ProposerClient, Question, SolverMessage, Task, TaskInfo, Usage } from "./types.ts";
 import { addUsage, emptyUsage } from "./usage.ts";
 
 export type ProposalStatus = "edit" | "no_change" | "invalid";
@@ -27,8 +27,17 @@ export interface Proposal {
 	usage: Usage;
 }
 
+/** What a tool-using proposer may run: the parent's feedback questions, never scoring or held-out questions. */
+export interface FeedbackContext {
+	task: Task;
+	questions: readonly Question[];
+	deps: CapabilityDeps;
+	concurrency: number;
+}
+
 export interface ProposeOptions {
-	client: ProposerClient;
+	/** Model used by the single-shot proposer; other ProposeFn implementations may ignore it. */
+	client?: ProposerClient;
 	task: TaskInfo;
 	capabilities: readonly CapabilityName[];
 	budgets: Budgets;
@@ -41,11 +50,18 @@ export interface ProposeOptions {
 	attempts: number;
 	branch?: { index: number; total: number };
 	screen: (source: string) => Promise<ScreenResult>;
+	/** Feedback questions a tool-using proposer may evaluate candidates on. */
+	feedback?: FeedbackContext;
 	signal?: AbortSignal;
 }
 
+/** Any revision rule: maps a revision context to a proposal. */
+export type ProposeFn = (options: ProposeOptions) => Promise<Proposal>;
+
 /** Samples one revision y ~ π(·|x), applies it, and screens the result. */
 export async function propose(o: ProposeOptions): Promise<Proposal> {
+	const client = o.client;
+	if (!client) throw new Error("propose() needs a ProposerClient");
 	const system = proposerSystemPrompt({ capabilities: o.capabilities, budgets: o.budgets, maxLines: o.maxLines });
 	const messages: SolverMessage[] = [
 		{
@@ -79,7 +95,7 @@ export async function propose(o: ProposeOptions): Promise<Proposal> {
 	for (let attempt = 1; attempt <= o.attempts; attempt++) {
 		let text: string;
 		try {
-			const response = await o.client.complete({ system, messages: [...messages] }, o.signal);
+			const response = await client.complete({ system, messages: [...messages] }, o.signal);
 			addUsage(usage, response.usage);
 			if (response.stopReason === "error" || response.error) {
 				errors.push(`proposer model error: ${response.error ?? "unknown error"}`);
