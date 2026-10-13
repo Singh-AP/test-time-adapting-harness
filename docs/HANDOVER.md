@@ -62,10 +62,13 @@ an hour of work, see §9). The user has not answered yet.
 
 ## 3. How to run
 
+Every command that calls Bedrock needs the prefix `AWS_PROFILE=<aws-profile>`, after vending credentials
+(§4). `npm test` and `npm run check` do not call Bedrock. `AWS_REGION` defaults to `us-east-1`. `pi` is not on
+`PATH`; run it as `node_modules/.bin/pi`.
+
 ```bash
 npm install --ignore-scripts
 uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python reasoning-gym==0.1.19 pyarrow==21.0.0
-export AWS_PROFILE=<aws-profile>            # after vending credentials (§4); AWS_REGION defaults to us-east-1
 npm test && npm run check
 node src/cli.ts adapt --task rg:maze --rounds 3   # artifacts in runs/<id>/ (summary.md, final.js, round-NN/...)
 node src/cli.ts adapt --task rg:count_primes --rounds 1 --dev 8 --heldout 10 --proposer-mode agentic
@@ -74,7 +77,7 @@ node experiments/qa-suite.ts --datasets hotpotqa,musique,2wiki --rounds 6 --prop
 node experiments/audit.ts --out results/audit.md runs/<run-dir>...
 node src/cli.ts export --out data/learning runs/<run-dir>...      # rollouts.jsonl and sft.jsonl
 node src/cli.ts playbook --out results/playbook.md runs/<run-dir>...
-pi -p --no-session --provider amazon-bedrock --model us.anthropic.claude-sonnet-5 --tools adapt_harness -e ./src/pi/extension.ts "Use adapt_harness on rg:count_primes with 1 round"
+node_modules/.bin/pi -p --no-session --provider amazon-bedrock --model us.anthropic.claude-sonnet-5 --tools adapt_harness -e ./src/pi/extension.ts "Use adapt_harness on rg:count_primes with 1 round"
 ```
 
 The QA data is already prepared under `data/qa/`. The download and preparation commands are in the README.
