@@ -28,6 +28,10 @@ from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 from pydantic import Field
 
+from python.tbench import harbor_patches
+
+harbor_patches.apply()
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 MAIN_TS = REPO_ROOT / "src" / "tbench" / "main.ts"
 HARBOR_CACHE = pathlib.Path("~/.cache/harbor/tasks").expanduser()
