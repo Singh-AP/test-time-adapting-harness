@@ -87,6 +87,7 @@
     "terminal-bench/distributed-dedup",
     "terminal-bench/embedding-drift-monitor",
     "terminal-bench/formal-crypto",
+    "terminal-bench/fp8-rmsnorm-gemm",
     "terminal-bench/freecad-impeller",
     "terminal-bench/freecad-platform-drawing",
     "terminal-bench/freecad-spring-clip",
@@ -96,11 +97,13 @@
     "terminal-bench/html-js-filter",
     "terminal-bench/interleaved-vigenere",
     "terminal-bench/intrastat-meldung",
+    "terminal-bench/jax-speedrun-gpu",
     "terminal-bench/ks-solver-cpp",
     "terminal-bench/kv-live-surgery",
     "terminal-bench/layout-config-recreation",
     "terminal-bench/layout-config-recreation2",
     "terminal-bench/legacy-utility-triage",
+    "terminal-bench/math-eval-grader",
     "terminal-bench/mp-checkpoint-consolidation",
     "terminal-bench/mvcc-lsm-compaction",
     "terminal-bench/nextjs-performance",
@@ -123,5 +126,5 @@
     "terminal-bench/wal-recovery-ordering",
     "terminal-bench/wdm-design"
   ],
-  "offline_note": "Tasks whose reference solution (oracle) passes with container internet blocked (experiments/tbench/offline.sh). vpp-loss-divergence and the GPU tasks are added once their offline oracle runs finish."
+  "offline_note": "Tasks whose reference solution (oracle) passes with container internet blocked (experiments/tbench/offline.sh): 46 CPU tasks and the 3 GPU tasks. vpp-loss-divergence errored offline and is excluded."
 }
