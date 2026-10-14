@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { describe, expect, test } from "vitest";
-import { runTerminalAgent } from "../src/tbench/agent.ts";
+import { continueTruncated, endsTruncated, runTerminalAgent } from "../src/tbench/agent.ts";
 import { type Harness, loadHarness } from "../src/tbench/harness.ts";
 import type { RemoteEnvironment } from "../src/tbench/remote.ts";
 
@@ -58,6 +58,8 @@ function testHarness(extra: Partial<Harness> = {}): Harness {
 		contextWindow: 200_000,
 		compaction: { enabled: false, reserveTokens: 16_000, keepRecentTokens: 20_000 },
 		timeWarnings: [],
+		maxLengthRecoveries: 4,
+		continuePrompt: "Your last reply was cut off by the output length limit. Continue ({{time_left}} left).",
 		...extra,
 	};
 }
@@ -117,6 +119,103 @@ describe("runTerminalAgent", () => {
 			cwd: root,
 		});
 		expect(result.stopReason).toBe("deadline");
+	});
+});
+
+describe("truncated replies", () => {
+	test("a reply cut off by the output limit is continued instead of ending the run", async () => {
+		const { env, root } = await localEnvironment();
+		const { runtime, model } = await fauxRuntime([
+			// pi retries the first truncated reply itself (once per run); the harness continues after the second.
+			fauxAssistantMessage([fauxText("I will now write the fi")], { stopReason: "length" }),
+			fauxAssistantMessage([fauxText("Writing the file no")], { stopReason: "length" }),
+			fauxAssistantMessage([fauxToolCall("write", { path: "out.txt", content: "done\n" })], {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage([fauxText("Wrote out.txt.")]),
+		]);
+		const logsDir = await mkdtemp(join(tmpdir(), "tta-length-logs-"));
+		const result = await runTerminalAgent({
+			instruction: "Write out.txt",
+			env,
+			runtime,
+			model,
+			harness: testHarness({ finishCheck: "" }),
+			timeBudgetSec: 600,
+			cwd: root,
+			logsDir,
+		});
+		expect(result.stopReason).toBe("completed");
+		expect(await readFile(join(root, "out.txt"), "utf8")).toBe("done\n");
+	});
+
+	test("continueTruncated compacts a full context, then continues until a reply is complete", async () => {
+		const messages: Record<string, unknown>[] = [{ role: "assistant", stopReason: "length" }];
+		const prompts: string[] = [];
+		let compactions = 0;
+		const replies = ["length", "stop"];
+		const session = {
+			messages,
+			prompt: async (text: string) => {
+				prompts.push(text);
+				messages.push({ role: "user" }, { role: "assistant", stopReason: replies.shift() });
+			},
+			compact: async () => {
+				compactions++;
+			},
+			getContextUsage: () => ({ tokens: 900_000, contextWindow: 1_000_000 }),
+		};
+		const n = await continueTruncated(session, {
+			maxRecoveries: 5,
+			canContinue: () => true,
+			continuePrompt: () => "CONTINUE",
+			onError: () => {},
+		});
+		expect(n).toBe(2);
+		expect(prompts).toEqual(["CONTINUE", "CONTINUE"]);
+		expect(compactions).toBe(2);
+	});
+
+	test("continueTruncated stops at the limit and when continuing is not allowed", async () => {
+		const always = {
+			messages: [{ role: "assistant", stopReason: "length" }],
+			prompt: async () => {},
+			compact: async () => {},
+			getContextUsage: () => ({ tokens: 10, contextWindow: 1_000_000 }),
+		};
+		const options = { canContinue: () => true, continuePrompt: () => "C", onError: () => {} };
+		expect(await continueTruncated(always, { ...options, maxRecoveries: 3 })).toBe(3);
+		expect(await continueTruncated(always, { ...options, maxRecoveries: 3, canContinue: () => false })).toBe(0);
+		expect(endsTruncated({ messages: [{ role: "assistant", stopReason: "stop" }] })).toBe(false);
+	});
+
+	test("review issues written before the verdict line reach the agent", async () => {
+		const { env, root } = await localEnvironment();
+		const { runtime, model } = await fauxRuntime([
+			fauxAssistantMessage([fauxText("Done.")]),
+			fauxAssistantMessage([fauxText("1. result.txt has the wrong value.\n\nVERDICT: FAIL")]),
+			fauxAssistantMessage([fauxText("Fixed.")]),
+			fauxAssistantMessage([fauxText("VERDICT: PASS")]),
+		]);
+		const result = await runTerminalAgent({
+			instruction: "x",
+			env,
+			runtime,
+			model,
+			harness: testHarness({
+				finishCheck: "",
+				review: {
+					prompt: "R",
+					request: "{{instruction}}",
+					followup: "ISSUES: {{issues}}",
+					maxRounds: 2,
+					minTimeLeftSec: 0,
+				},
+			}),
+			timeBudgetSec: 600,
+			cwd: root,
+		});
+		expect(result.reviews[0].issues).toContain("result.txt has the wrong value");
 	});
 });
 

@@ -44,6 +44,10 @@ export interface Harness {
 	/** Fractions of the time budget at which the agent is told how much time remains. */
 	timeWarnings: number[];
 	review?: ReviewSettings;
+	/** Continuations after a reply cut off by the output limit (compacting first when the context is large). */
+	maxLengthRecoveries: number;
+	/** Sent after a truncated reply; `{{time_left}}` is replaced. */
+	continuePrompt: string;
 }
 
 export const HARNESS_DEFAULTS: Omit<Harness, "name" | "systemPrompt" | "userPrompt" | "probe" | "finishCheck"> = {
@@ -53,6 +57,9 @@ export const HARNESS_DEFAULTS: Omit<Harness, "name" | "systemPrompt" | "userProm
 	contextWindow: 400_000,
 	compaction: { enabled: true, reserveTokens: 32_000, keepRecentTokens: 60_000 },
 	timeWarnings: [0.5, 0.75, 0.9],
+	maxLengthRecoveries: 6,
+	continuePrompt:
+		"Your last reply was cut off by the output length limit before you acted. Continue the task from where you were: keep your reasoning brief and call the tools you need. About {{time_left}} remain.",
 };
 
 async function optionalFile(path: string): Promise<string> {

@@ -42,6 +42,8 @@ const SETTING_KEYS = new Set([
 	"compaction",
 	"timeWarnings",
 	"review",
+	"maxLengthRecoveries",
+	"continuePrompt",
 ]);
 
 export interface ScreenResult {
@@ -105,7 +107,7 @@ A fixed model solves Terminal-Bench tasks: hard, realistic tasks in a Linux cont
 - probe.sh: a shell script run in the container before the first turn; its output fills {{environment}}.
 - finish.md: sent when the agent first stops, asking it to verify ({{time_left}} available). Empty disables it.
 - review.md, review-request.md, review-followup.md: an independent reviewer (fresh context, bash and read tools) audits the container after the agent stops. review-request.md is its first message ({{instruction}}, {{summary}}, {{time_left}}). It must end with "VERDICT: PASS" or "VERDICT: FAIL" and numbered issues; on FAIL, review-followup.md ({{issues}}, {{time_left}}) goes back to the agent. Deleting review.md disables reviews.
-- harness.json: thinkingLevel (off|minimal|low|medium|high|xhigh|max), maxFinishChecks, bash {defaultTimeoutSec, maxTimeoutSec, headBytes, tailBytes}, contextWindow (compaction triggers near it), compaction {enabled, reserveTokens, keepRecentTokens}, timeWarnings (fractions of the budget at which the agent is told the remaining time), review {maxRounds, minTimeLeftSec}.
+- harness.json: thinkingLevel (off|minimal|low|medium|high|xhigh|max), maxFinishChecks, bash {defaultTimeoutSec, maxTimeoutSec, headBytes, tailBytes}, contextWindow (compaction triggers near it), compaction {enabled, reserveTokens, keepRecentTokens}, timeWarnings (fractions of the budget at which the agent is told the remaining time), review {maxRounds, minTimeLeftSec}, maxLengthRecoveries and continuePrompt (what happens when a reply is cut off by the output limit).
 
 Tools the agent has: bash (fresh shell per call, stdin is /dev/null, output capped to head and tail, timeout), read, edit, write.
 `;

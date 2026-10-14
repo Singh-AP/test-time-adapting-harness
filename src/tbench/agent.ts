@@ -70,6 +70,8 @@ export interface ReviewRecord {
 export interface TerminalAgentResult extends AgentUsage {
 	stopReason: "completed" | "deadline" | "error";
 	finishChecks: number;
+	/** Replies cut off by the output limit that were continued. */
+	lengthRecoveries: number;
 	reviews: ReviewRecord[];
 	finalText: string;
 	errors: string[];
@@ -236,6 +238,46 @@ async function taskExtras(
 	return parts.join("\n\n");
 }
 
+/** Whether the last assistant message was cut off by the output limit. */
+export function endsTruncated(s: { messages: readonly unknown[] }): boolean {
+	const last = [...s.messages].reverse().find((m) => (m as { role?: string }).role === "assistant") as
+		| { stopReason?: string }
+		| undefined;
+	return last?.stopReason === "length";
+}
+
+export interface TruncatableSession {
+	messages: readonly unknown[];
+	prompt(text: string): Promise<void>;
+	compact(): Promise<unknown>;
+	getContextUsage(): { tokens: number | null; contextWindow: number } | undefined;
+}
+
+/**
+ * Continues a session whose reply was cut off by the output limit (a runaway thought, or a context so full that
+ * little output room remained), compacting first when the context is large. pi retries a truncated reply once per
+ * run by itself; this covers the rest. Returns the number of continuations sent.
+ */
+export async function continueTruncated(
+	s: TruncatableSession,
+	o: { maxRecoveries: number; canContinue: () => boolean; continuePrompt: () => string; onError: (m: string) => void },
+): Promise<number> {
+	let n = 0;
+	while (n < o.maxRecoveries && o.canContinue() && endsTruncated(s)) {
+		n++;
+		const usage = s.getContextUsage();
+		if (usage?.tokens && usage.tokens > 0.7 * usage.contextWindow) {
+			try {
+				await s.compact();
+			} catch (error) {
+				o.onError(`compaction after a truncated reply failed: ${errorMessage(error)}`);
+			}
+		}
+		await s.prompt(o.continuePrompt());
+	}
+	return n;
+}
+
 /** Runs one Terminal-Bench task: the pi agent on the host, its tools in the task container. */
 export async function runTerminalAgent(o: TerminalAgentOptions): Promise<TerminalAgentResult> {
 	const started = Date.now();
@@ -360,6 +402,18 @@ export async function runTerminalAgent(o: TerminalAgentOptions): Promise<Termina
 			),
 		);
 
+	let lengthRecoveries = 0;
+	/** session.prompt, then continue replies cut off by the output limit instead of ending the run. */
+	const promptAgent = async (text: string) => {
+		await session.prompt(text);
+		lengthRecoveries += await continueTruncated(session, {
+			maxRecoveries: h.maxLengthRecoveries - lengthRecoveries,
+			canContinue: () => stopReason === "completed" && remaining() > 60,
+			continuePrompt: () => renderTemplate(h.continuePrompt, { time_left: formatDuration(remaining()) }),
+			onError: (message) => errors.push(message),
+		});
+	};
+
 	const reviews: ReviewRecord[] = [];
 	const review = async (round: number): Promise<ReviewRecord> => {
 		const r = h.review as ReviewSettings;
@@ -372,6 +426,10 @@ export async function runTerminalAgent(o: TerminalAgentOptions): Promise<Termina
 		});
 		try {
 			await reviewer.prompt(request);
+			if (endsTruncated(reviewer) && stopReason === "completed")
+				await reviewer.prompt(
+					"Your reply was cut off by the output length limit. Finish the review now: list the problems you found, then end with the verdict line.",
+				);
 		} finally {
 			active = session;
 		}
@@ -388,13 +446,16 @@ export async function runTerminalAgent(o: TerminalAgentOptions): Promise<Termina
 		}
 		reviewer.dispose();
 		const verdict = /VERDICT:\s*(PASS|FAIL)/i.exec(text)?.[1]?.toUpperCase();
-		const issues =
+		const failAt = text.search(/VERDICT:\s*FAIL/i);
+		let issues =
 			verdict === "FAIL"
 				? text
-						.slice(text.search(/VERDICT:\s*FAIL/i))
+						.slice(failAt)
 						.replace(/VERDICT:\s*FAIL\s*/i, "")
 						.trim()
 				: "";
+		// Reviewers often list the problems first and end with the verdict line.
+		if (verdict === "FAIL" && !issues) issues = text.slice(0, failAt).trim();
 		return {
 			round,
 			verdict: verdict === "PASS" ? "pass" : verdict === "FAIL" ? "fail" : "none",
@@ -406,7 +467,7 @@ export async function runTerminalAgent(o: TerminalAgentOptions): Promise<Termina
 
 	let finishChecks = 0;
 	try {
-		await session.prompt(
+		await promptAgent(
 			renderTemplate(h.userPrompt, {
 				instruction: o.instruction,
 				environment: environment || "(no environment snapshot)",
@@ -415,14 +476,14 @@ export async function runTerminalAgent(o: TerminalAgentOptions): Promise<Termina
 		);
 		while (stopReason === "completed" && h.finishCheck && finishChecks < h.maxFinishChecks && remaining() > 60) {
 			finishChecks++;
-			await session.prompt(renderTemplate(h.finishCheck, { time_left: formatDuration(remaining()) }));
+			await promptAgent(renderTemplate(h.finishCheck, { time_left: formatDuration(remaining()) }));
 		}
 		for (let round = 1; h.review && round <= h.review.maxRounds; round++) {
 			if (stopReason !== "completed" || remaining() < Math.max(60, h.review.minTimeLeftSec)) break;
 			const record = await review(round);
 			reviews.push(record);
 			if (record.pass || stopReason !== "completed") break;
-			await session.prompt(
+			await promptAgent(
 				renderTemplate(h.review.followup, { issues: record.issues, time_left: formatDuration(remaining()) }),
 			);
 		}
@@ -439,6 +500,7 @@ export async function runTerminalAgent(o: TerminalAgentOptions): Promise<Termina
 		...usage(),
 		stopReason,
 		finishChecks,
+		lengthRecoveries,
 		reviews,
 		finalText: session.getLastAssistantText() ?? "",
 		errors,
