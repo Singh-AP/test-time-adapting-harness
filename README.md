@@ -171,6 +171,38 @@ async function solve(question) {
 `llm(request)` takes a prompt string or `{system, prompt, messages, temperature, maxTokens}` and returns the
 solver's text. `python(code, {timeoutMs, stdin})` returns `{stdout, stderr, exitCode, timedOut}`.
 
+## Terminal-Bench
+
+`src/tbench/` turns the pi coding agent into a Harbor agent for [Terminal-Bench](https://www.tbench.ai/). Its
+harness can be adapted with the same loop that adapts harnesses for reasoning and QA tasks.
+
+- **Agent.** `python/tbench/harbor_agent.py:PiHarnessAgent` runs a pi session on the host. Its tools (a bash tool
+  built for containers, plus pi's read, edit and write) execute inside the task container through Harbor's
+  environment API. Model credentials never enter the container.
+- **Harness.** A harness is a directory, for example `harnesses/tbench/v1/`, holding:
+  - the system prompt;
+  - the first message, with an environment probe;
+  - a finish check;
+  - an independent reviewer that audits the container before the agent may finish;
+  - settings: thinking level, bash limits, compaction and time warnings.
+- **Harness learning.**
+  - `node src/tbench/cli.ts report` builds an execution report from dev-split trials.
+  - `node src/tbench/cli.ts propose` has an agentic proposer edit a copy of the harness.
+  - Edits that mention development tasks or hidden tests are rejected.
+  - The split in `experiments/tbench/splits/tb4.json` keeps held-out tasks out of every report.
+- **Runner hosts.**
+  - `python/tbench/aws_infra.py` launches EC2 hosts with Docker, Harbor and this repository.
+  - Each host has an instance role that may only invoke Bedrock, and IMDSv2 hop limit 1 keeps containers away
+    from that role.
+  - `experiments/tbench/run.sh` starts a job on a host; `sync.sh` and `summarize.py` collect the results.
+
+```bash
+# On a runner host (see docs/HANDOVER.md §11 for provisioning)
+experiments/tbench/run.sh smoke harnesses/tbench/v1 global.anthropic.claude-sonnet-5-5 dev exclude 8
+# Check the tool layer in real task containers without model calls
+experiments/tbench/run.sh selftest harnesses/tbench/v1 global.anthropic.claude-sonnet-5-5 all exclude 32 --ak self_test=true --disable-verification
+```
+
 ## Safety
 
 Proposer-written harness code runs only inside QuickJS (no filesystem, network, process or timers). Solver-written
