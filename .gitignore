@@ -6,3 +6,6 @@ data/
 .env
 .DS_Store
 .superpowers/
+.venv-harbor/
+jobs/
+__pycache__/

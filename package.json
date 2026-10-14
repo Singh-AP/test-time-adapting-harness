@@ -13,7 +13,8 @@
 	"scripts": {
 		"test": "vitest run",
 		"check": "biome check --write && tsc --noEmit",
-		"tta": "node src/cli.ts"
+		"tta": "node src/cli.ts",
+		"test:py": ".venv-harbor/bin/python -m unittest discover -s python/tests -t ."
 	},
 	"dependencies": {
 		"@earendil-works/pi-ai": "1.1.0",
