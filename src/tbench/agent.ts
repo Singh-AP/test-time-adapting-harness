@@ -16,6 +16,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { clip, errorMessage } from "../util/text.ts";
 import { type BashSettings, formatDuration, type Harness, type ReviewSettings, renderTemplate } from "./harness.ts";
+import { McpSseClient, mcpToolDefinitions } from "./mcp.ts";
 import { type RemoteEnvironment, RemoteShell, remoteFileOperations, shellQuote } from "./remote.ts";
 
 export interface AgentUsage {
@@ -151,7 +152,53 @@ export function renderTranscript(messages: readonly unknown[]): string {
 }
 
 /** Lists task-provided skills (from each SKILL.md's front matter) and MCP servers for the first message. */
-async function taskExtras(shell: RemoteShell, skillsDir: string | undefined, servers: McpServer[]): Promise<string> {
+/**
+ * Connects to task-provided MCP servers on the SSE transport. Their hosts are compose service names, resolved
+ * inside the task container to container IPs the runner host can reach; the original Host header is kept.
+ */
+export async function connectMcpServers(shell: RemoteShell, servers: McpServer[]) {
+	const tools: ToolDefinition<any, any, any>[] = [];
+	const clients: McpSseClient[] = [];
+	const notes = new Map<string, string>();
+	const errors: string[] = [];
+	for (const server of servers) {
+		if (server.transport !== "sse" || !server.url) {
+			notes.set(server.name, "not connected: only the SSE transport is supported by this agent");
+			continue;
+		}
+		try {
+			const url = new URL(server.url);
+			const original = url.host;
+			if (!/^[\d.]+$/.test(url.hostname) && url.hostname !== "localhost") {
+				const lookup = await shell.run(
+					`getent hosts ${shellQuote(url.hostname)} | awk '{print $1}' | head -n 1`,
+					30,
+				);
+				const ip = lookup.output.trim();
+				if (/^[\d.]+$/.test(ip)) url.hostname = ip;
+			}
+			const client = new McpSseClient(url.toString(), { hostHeader: original });
+			const defs = await Promise.race([
+				mcpToolDefinitions(server.name, client),
+				new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timed out listing tools")), 60_000)),
+			]);
+			clients.push(client);
+			tools.push(...defs);
+			notes.set(server.name, `connected; ${defs.length} tools available as mcp__${server.name}__*`);
+		} catch (error) {
+			errors.push(`MCP server ${server.name}: ${errorMessage(error)}`);
+			notes.set(server.name, `could not be reached from the agent (${errorMessage(error)})`);
+		}
+	}
+	return { tools, clients, notes, errors };
+}
+
+async function taskExtras(
+	shell: RemoteShell,
+	skillsDir: string | undefined,
+	servers: McpServer[],
+	mcpNotes: Map<string, string> = new Map(),
+): Promise<string> {
 	const parts: string[] = [];
 	if (skillsDir) {
 		const listing = await shell
@@ -180,7 +227,10 @@ async function taskExtras(shell: RemoteShell, skillsDir: string | undefined, ser
 	if (servers.length)
 		parts.push(
 			`MCP servers provided with this task:\n${servers
-				.map((m) => `- ${m.name}: ${m.transport} ${m.url ?? [m.command, ...(m.args ?? [])].join(" ")}`)
+				.map(
+					(m) =>
+						`- ${m.name}: ${m.transport} ${m.url ?? [m.command, ...(m.args ?? [])].join(" ")}${mcpNotes.has(m.name) ? ` (${mcpNotes.get(m.name)})` : ""}`,
+				)
 				.join("\n")}`,
 		);
 	return parts.join("\n\n");
@@ -215,7 +265,9 @@ export async function runTerminalAgent(o: TerminalAgentOptions): Promise<Termina
 		}
 	}
 
-	const extras = await taskExtras(shell, o.skillsDir, o.mcpServers ?? []);
+	const mcp = await connectMcpServers(shell, o.mcpServers ?? []);
+	errors.push(...mcp.errors);
+	const extras = await taskExtras(shell, o.skillsDir, o.mcpServers ?? [], mcp.notes);
 	if (extras) environment = `${environment}\n\n${extras}`.trim();
 
 	const files = remoteFileOperations(o.env);
@@ -225,6 +277,7 @@ export async function runTerminalAgent(o: TerminalAgentOptions): Promise<Termina
 		read,
 		createEditToolDefinition(cwd, { operations: files.edit }),
 		createWriteToolDefinition(cwd, { operations: files.write }),
+		...mcp.tools,
 	];
 	const model = { ...o.model, contextWindow: Math.min(o.model.contextWindow, h.contextWindow) } as Model<Api>;
 	const openSession = async (systemPrompt: string, sessionTools: ToolDefinition<any, any, any>[]) =>
@@ -403,5 +456,6 @@ export async function runTerminalAgent(o: TerminalAgentOptions): Promise<Termina
 		}
 	}
 	session.dispose();
+	for (const client of mcp.clients) client.close();
 	return result;
 }

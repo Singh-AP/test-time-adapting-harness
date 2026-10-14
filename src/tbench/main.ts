@@ -8,10 +8,10 @@ import { join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { errorMessage } from "../util/text.ts";
-import { type McpServer, runTerminalAgent } from "./agent.ts";
+import { connectMcpServers, type McpServer, runTerminalAgent } from "./agent.ts";
 import { HarborBridge } from "./bridge.ts";
 import { loadHarness } from "./harness.ts";
-import { bridgeEnvironment } from "./remote.ts";
+import { bridgeEnvironment, RemoteShell } from "./remote.ts";
 import { runSelfTest } from "./selftest.ts";
 
 interface AgentConfig {
@@ -36,6 +36,15 @@ async function main(): Promise<void> {
 		const env = bridgeEnvironment(bridge);
 		const cwd = (await env.exec("pwd", 30)).stdout.trim() || "/";
 		const checks = await runSelfTest(env, cwd);
+		if (config.mcpServers?.length) {
+			const mcp = await connectMcpServers(new RemoteShell(env, { cwd }), config.mcpServers);
+			checks.push({
+				name: "MCP servers reachable",
+				ok: mcp.errors.length === 0 && mcp.tools.length > 0,
+				detail: `${mcp.tools.length} tools: ${mcp.tools.map((t) => t.name).join(", ")} ${mcp.errors.join("; ")}`,
+			});
+			for (const client of mcp.clients) client.close();
+		}
 		const failed = checks.filter((c) => !c.ok);
 		await mkdir(config.logsDir, { recursive: true });
 		await writeFile(join(config.logsDir, "selftest.json"), `${JSON.stringify(checks, null, 2)}\n`);
