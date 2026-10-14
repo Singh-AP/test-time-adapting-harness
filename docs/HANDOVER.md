@@ -406,6 +406,24 @@ continue with **TB 4.0 offline**, and the guardrail must not be bypassed.
     environment start failures such as flaky sidecars.
 14. The Bash tool caps a single call at 10 minutes, so poll long waits in steps of 280 s or less.
 
+15. **Silently truncated replies (the largest bug so far).** In v0 and v1, 5 of 28 and 6 of 18 offline sessions
+    ended on an assistant message with `stopReason: "length"`. pi treats a reply without tool calls as the end of
+    the turn, so the agent stopped mid-task with "completed". There were two causes:
+    - The 400k effective `contextWindow` override clamped the output to the room left in the window (1 to 12k
+      tokens), while compaction never triggered.
+    - At max effort the model sometimes thought for all 128k output tokens.
+
+    pi recovers a truncated reply only once per run, and never when the output reached its limit. The fixes, in v2
+    and later:
+    - use the model's real window, with `reserveTokens` 600000 so compaction triggers at about 400k;
+    - harness-level `continueTruncated` (`maxLengthRecoveries`), which compacts first when the context is large;
+    - review issues written before the `VERDICT:` line are no longer dropped.
+16. `pkill -f <pattern>` over SSH can match the SSH command's own command line and kill it. Anchor the pattern:
+    `pkill -f "^node .*main.ts"`.
+17. A non-root `iptables -C` fails, so `offline.sh status` without sudo read "online". The script now requires root.
+18. The Mac's egress IP can change (it moved to <client-ip>). If SSH times out, check with
+    `curl checkip.amazonaws.com` and `aws_infra allow-ip` before suspecting BPA.
+
 **Status at writing.**
 
 - Oracle on 53 CPU tasks: all pass except `cad-model` (upstream), `live-database-cutover`, and the two network-probe
