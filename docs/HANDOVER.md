@@ -276,3 +276,98 @@ Every run used solver Qwen3-32B and one run per configuration. The run directori
 - `data/raw/<dataset>/validation.parquet` holds the Hugging Face downloads (treat them as untrusted data).
   `data/qa/<dataset>/{corpus,questions}.jsonl` holds the prepared files. Corpus sizes: HotpotQA 66,635
   paragraphs, MuSiQue 21,100, 2Wiki 56,687.
+
+## 11. Terminal-Bench 4.0 (in progress since 2026-10-14)
+
+**Goal (user, /goal):** this harness reaches state of the art or better on Terminal-Bench 4.0. Set up the benchmark
+environment, test it, and verify the harness after each major change. **Order of work (user):** improve the harness
+with Sonnet 5.5 as the agent model; switch to Opus 5.5 only once no further harness improvement is possible.
+
+**Target.**
+
+- TB 4.0 has 66 tasks, each with an 8 h agent timeout. Three need an H100: `fp8-rmsnorm-gemm`, `jax-speedrun-gpu`
+  and `math-eval-grader`.
+- Leaderboard as of 2026-10-06, 5 trials per task:
+  - Claude Code + Opus 5.5 (max effort): 64.85% ± 3.1; $4.7k; 80 min per trial.
+  - Claude Code + Sonnet 5.5 (max effort): 61.82%.
+- Read it with `.venv-harbor/bin/harbor hub leaderboard show terminal-bench/terminal-bench/4-0-0 --json`.
+
+**Architecture.**
+
+- Harbor 0.24.0 runs in `.venv-harbor`, set up with `uv venv --python 3.12 .venv-harbor && uv pip install 'harbor[ec2]==0.24.0'`.
+- Harbor runs on EC2 runner hosts with the Docker environment.
+- The agent is `python/tbench/harbor_agent.py:PiHarnessAgent`, an external Harbor agent. It spawns
+  `src/tbench/main.ts`, a pi SDK session on the host, and relays exec, upload and download requests over a JSON-lines
+  bridge (`src/tbench/bridge.ts`) to Harbor's environment API.
+- Tools:
+  - `bash` is our own (`src/tbench/remote.ts`, `RemoteShell`). It writes the command to a script, runs it under
+    `timeout` with stdin from `/dev/null` and output in a log file, and returns only the head and tail.
+  - read, edit and write are pi's own tools with remote operations.
+- Credentials never enter containers. Bedrock calls are made on the host with the instance role `tta-tbench-runner`,
+  which may only invoke Bedrock. IMDSv2 uses hop limit 1, so containers can't reach the role.
+- pi only recognizes credentials signalled by env vars or a profile, so hosts have the profile `tta-instance` with
+  `credential_process = python3 python/tbench/imds_credentials.py`. The agent defaults `AWS_PROFILE` to it.
+
+**Harness format** (`harnesses/tbench/<version>/`, loaded by `src/tbench/harness.ts`):
+
+- `system.md`, `user.md` (`{{instruction}}`, `{{environment}}`, `{{time_budget}}`), `probe.sh` (an environment
+  snapshot injected into the first message);
+- `finish.md` (the verification prompt sent when the agent first stops);
+- `review*.md`: a fresh-context reviewer that audits the container. Its FAIL issues go back to the agent, for up to
+  `review.maxRounds` rounds;
+- `harness.json`: thinking level, bash limits, compaction window, time warnings.
+
+Versions:
+
+- v0: prompt, probe and finish check.
+- v1: v0 plus the reviewer and an all-or-nothing persistence prompt.
+
+**Harness learning** (`src/tbench/cli.ts`):
+
+- `report` builds a dev-only execution report from synced jobs (`src/tbench/report.ts`, with hidden-test names from
+  `verifier/ctrf.json`).
+- `propose` runs an agentic proposer (Opus 5.5) on a copy of the parent harness (`src/tbench/propose.ts`).
+- `screenHarnessDir` rejects edits that mention dev task names or failed hidden-test names, are oversized, or break
+  the templates.
+- Split: `experiments/tbench/splits/tb4.json`, 35 dev and 31 held-out tasks, stratified by category. **Only dev
+  failures may inform harness changes.** The smoke task `session-window-debug` turned out to be held-out; it informed
+  only the generic persistence rule in v1.
+
+**Infrastructure** (`python/tbench/aws_infra.py`, run with the `AWS_PROFILE=<aws-profile>` prefix):
+
+- `setup`, `launch --label L --type T [--flavor gpu] [--spot]`, `list`, `wait`, `stop`, `start`, `terminate`,
+  `allow-ip --cidr`.
+- Hosts are tagged `Project=tta-tbench`, and the script refuses to act on anything else.
+- CPU host `<cpu-instance-id>` (us-east-1): m7i.48xlarge, 192 vCPU, 743 GB, 1.2 TB disk. Its IP changes on every
+  stop or start; the latest was <cpu-host-ip>.
+- GPU host `<gpu-instance-id>` (us-east-2): spot p5.4xlarge, one H100, at <gpu-host-ip>. No on-demand or spot
+  p5.4xlarge capacity was available in us-east-1.
+- Run jobs on a host with
+  `experiments/tbench/run.sh <job> <harness-dir> <model> <dev|heldout|all> <gpu include|exclude|only> <n>`.
+- Fetch results with `experiments/tbench/sync.sh <ip> <job>`, which writes `runs/tbench/<job>`.
+- Summarize with `python3 experiments/tbench/summarize.py runs/tbench/<job>`.
+
+**Terminal-Bench pitfalls so far.**
+
+1. The SSH security group must allow the operator's egress range (`<egress-cidr>`): several egress IPs are in use, so
+   a /32 times out.
+2. Task names need the `terminal-bench/` prefix in `-i` filters.
+3. Harbor's Docker no-network support (`allow_internet = false`, used by 2 tasks) depends on an alpine kernel probe
+   with a 30 s timeout. Under heavy image pulls it timed out, and the trials failed with "no-network is not
+   supported". The bootstrap now pre-pulls the probe image.
+4. pi's Bedrock auth does not detect EC2 instance roles; this is why the `tta-instance` credential_process profile
+   exists.
+5. The `cad-model` oracle fails on today's PyPI, because `build123d==0.10.0` pulls `ocp_gordon` 0.3.1, which needs
+   `OCP.collections`. This is upstream drift, not our environment.
+6. Never pipe `npm run check` or `npm test` into `tail` inside an `&&` chain: the pipe hides the failure, and a
+   commit went in with a tsc error once.
+7. Docker Hub allows anonymous pulls at 100 per hour per IP. With 132 images, prefer resizing a host that already
+   has them (stop, modify-instance-attribute, start) over launching a new one.
+
+**Status at writing.**
+
+- Oracle on 53 CPU tasks: all pass except `cad-model` (upstream), `live-database-cutover`, and the two network-probe
+  failures, which are being re-run with the remaining oracle tasks.
+- Smoke run of v0 (Sonnet-free, Opus high) on `session-window-debug`: 5/7 tests passed, reward 0, $0.32, 2 minutes.
+  The agent stopped with self-declared "known gaps".
+- Running: `v0-sonnet` and `v1-sonnet` on all 63 CPU tasks (k=1, n=32 each), plus `oracle-rest` and `oracle-gpu`.
