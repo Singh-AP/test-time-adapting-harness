@@ -1,0 +1,9 @@
+{
+	"name": "v0",
+	"thinkingLevel": "max",
+	"maxFinishChecks": 1,
+	"bash": { "defaultTimeoutSec": 600, "maxTimeoutSec": 3600, "headBytes": 12000, "tailBytes": 24000 },
+	"contextWindow": 400000,
+	"compaction": { "enabled": true, "reserveTokens": 32000, "keepRecentTokens": 60000 },
+	"timeWarnings": [0.5, 0.75, 0.9]
+}

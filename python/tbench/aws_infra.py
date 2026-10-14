@@ -163,10 +163,12 @@ class Infra:
 		print(f"created security group {group}")
 		return group
 
-	def allow_ip(self) -> None:
+	def allow_ip(self, cidr: str | None = None) -> None:
+		"""Allow SSH from `cidr`, or from this machine's current egress IP (NATs may use several)."""
 		group = self.ensure_security_group()
-		ip = urllib.request.urlopen("https://checkip.amazonaws.com", timeout=10).read().decode().strip()
-		cidr = f"{ip}/32"
+		if cidr is None:
+			ip = urllib.request.urlopen("https://checkip.amazonaws.com", timeout=10).read().decode().strip()
+			cidr = f"{ip}/32"
 		rules = self.ec2.describe_security_groups(GroupIds=[group])["SecurityGroups"][0]["IpPermissions"]
 		if any(r.get("FromPort") == 22 and any(x["CidrIp"] == cidr for x in r.get("IpRanges", [])) for r in rules):
 			print(f"{cidr} already allowed")
@@ -231,7 +233,7 @@ def main(argv: list[str]) -> None:
 	parser.add_argument("--region", default="us-east-1")
 	sub = parser.add_subparsers(dest="command", required=True)
 	sub.add_parser("setup")
-	sub.add_parser("allow-ip")
+	sub.add_parser("allow-ip").add_argument("--cidr", help="CIDR to allow (default: current egress IP /32)")
 	sub.add_parser("list")
 	launch = sub.add_parser("launch")
 	launch.add_argument("--label", required=True)
@@ -249,7 +251,7 @@ def main(argv: list[str]) -> None:
 		infra.ensure_key()
 		infra.allow_ip()
 	elif args.command == "allow-ip":
-		infra.allow_ip()
+		infra.allow_ip(args.cidr)
 	elif args.command == "launch":
 		instance_id = infra.launch(args.label, args.type, args.disk, args.flavor, args.ref)
 		print(f"ssh -i {KEY_PATH} ubuntu@{infra.wait(instance_id)}")
