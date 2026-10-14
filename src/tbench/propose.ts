@@ -246,8 +246,8 @@ export async function proposeHarness(o: HarnessProposalOptions): Promise<Harness
 		const transcript = renderTranscript(session.messages);
 		session.dispose();
 		const base = {
-			diagnosis: extractSection(finalText, ["diagnosis"]),
-			manifest: extractSection(finalText, ["change manifest", "manifest"]),
+			diagnosis: extractSection(finalText, ["diagnosis"]) ?? "",
+			manifest: extractSection(finalText, ["change manifest", "manifest"]) ?? "",
 			cost,
 			transcript,
 		};
