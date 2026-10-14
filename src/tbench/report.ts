@@ -13,6 +13,8 @@ export interface TrialSummary {
 	stopReason: string;
 	turns: number;
 	minutes: number;
+	/** The agent's wall-clock budget in minutes (0 if unknown). */
+	budgetMinutes: number;
 	cost: number;
 	reviews: { verdict: string; issues: string }[];
 	failedTests: string[];
@@ -62,6 +64,7 @@ export async function loadTrials(jobDirs: string[]): Promise<TrialSummary[]> {
 				stopReason: String(agent.stopReason ?? "unknown"),
 				turns: Number(agent.turns ?? 0),
 				minutes: Number(agent.elapsedSec ?? 0) / 60,
+				budgetMinutes: Number(agentConfig.timeBudgetSec ?? 0) / 60,
 				cost: Number(agent.cost ?? 0),
 				reviews: ((agent.reviews ?? []) as { verdict: string; issues: string }[]).map((r) => ({
 					verdict: r.verdict,
@@ -107,7 +110,7 @@ export function buildTbenchReport(all: TrialSummary[], o: TbenchReportOptions): 
 		lines.push(
 			"",
 			`### Failed: ${t.task.split("/").pop()}`,
-			`Stop: ${t.exception ?? t.stopReason}; ${t.turns} turns, ${t.minutes.toFixed(0)} minutes, $${t.cost.toFixed(2)}.`,
+			`Stop: ${t.exception ?? t.stopReason}; ${t.turns} turns, ${t.minutes.toFixed(0)} of ${t.budgetMinutes ? t.budgetMinutes.toFixed(0) : "?"} budget minutes used, $${t.cost.toFixed(2)}.`,
 			"",
 			"Task statement (excerpt):",
 			"```",

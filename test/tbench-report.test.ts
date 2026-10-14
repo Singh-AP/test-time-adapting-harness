@@ -20,7 +20,7 @@ async function fakeJob() {
 		await writeFile(join(dir, "result.json"), JSON.stringify({ verifier_result: { rewards: { reward } }, ...extra }));
 		await writeFile(
 			join(dir, "agent", "agent-config.json"),
-			JSON.stringify({ instruction: `Instruction for ${task}: build the thing.` }),
+			JSON.stringify({ instruction: `Instruction for ${task}: build the thing.`, timeBudgetSec: 28800 }),
 		);
 		await writeFile(
 			join(dir, "agent", "agent-result.json"),
@@ -73,6 +73,7 @@ describe("tbench report", () => {
 		expect(report).toContain("test_b2");
 		expect(report).toContain("assert 1 == 2");
 		expect(report).toContain("last words of beta");
+		expect(report).toContain("10 of 480 budget minutes used");
 		expect(report).not.toContain("gamma");
 	});
 });
