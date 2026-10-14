@@ -132,6 +132,17 @@ class Infra:
 			return
 		if existing:
 			raise SystemExit(f"key pair {KEY_NAME} exists but {KEY_PATH} is missing; delete the key pair to recreate it")
+		if KEY_PATH.exists():
+			import subprocess
+
+			public = subprocess.run(["ssh-keygen", "-y", "-f", str(KEY_PATH)], check=True, capture_output=True).stdout
+			self.ec2.import_key_pair(
+				KeyName=KEY_NAME,
+				PublicKeyMaterial=public,
+				TagSpecifications=[{"ResourceType": "key-pair", "Tags": [{"Key": "Project", "Value": PROJECT}]}],
+			)
+			print(f"imported {KEY_PATH} as key pair {KEY_NAME} in {self.region}")
+			return
 		key = self.ec2.create_key_pair(
 			KeyName=KEY_NAME,
 			KeyType="ed25519",
@@ -182,11 +193,51 @@ class Infra:
 		print(f"allowed SSH from {cidr}")
 
 	# --- hosts ----------------------------------------------------------------------------------------------
-	def launch(self, label: str, instance_type: str, disk_gb: int, flavor: str, repo_ref: str) -> str:
+	def default_subnets(self, instance_type: str) -> list[str]:
+		"""Default-VPC subnets in the availability zones that offer `instance_type`."""
+		offered = {
+			o["Location"]
+			for o in self.ec2.describe_instance_type_offerings(
+				LocationType="availability-zone", Filters=[{"Name": "instance-type", "Values": [instance_type]}]
+			)["InstanceTypeOfferings"]
+		}
+		subnets = self.ec2.describe_subnets(
+			Filters=[{"Name": "vpc-id", "Values": [self.default_vpc()]}, {"Name": "default-for-az", "Values": ["true"]}]
+		)["Subnets"]
+		return [n["SubnetId"] for n in sorted(subnets, key=lambda n: n["AvailabilityZone"]) if n["AvailabilityZone"] in offered]
+
+	def launch(self, label: str, instance_type: str, disk_gb: int, flavor: str, repo_ref: str, spot: bool = False) -> str:
+		"""Launches in the first availability zone with capacity for `instance_type`."""
+		last_error: Exception | None = None
+		for subnet in self.default_subnets(instance_type):
+			try:
+				return self._launch(label, instance_type, disk_gb, flavor, repo_ref, subnet, spot)
+			except self.ec2.exceptions.ClientError as error:
+				if error.response["Error"]["Code"] not in (
+					"InsufficientInstanceCapacity",
+					"Unsupported",
+					"SpotMaxPriceTooLow",
+					"InsufficientCapacity",
+				):
+					raise
+				print(f"no {instance_type} capacity in {subnet}; trying the next zone")
+				last_error = error
+		raise SystemExit(f"no capacity for {instance_type} in {self.region}: {last_error}")
+
+	def _launch(
+		self, label: str, instance_type: str, disk_gb: int, flavor: str, repo_ref: str, subnet: str, spot: bool
+	) -> str:
 		ami = self.ssm.get_parameter(Name=AMI_PARAMETERS[flavor])["Parameter"]["Value"]
 		group = self.ensure_security_group()
 		tags = [{"Key": "Project", "Value": PROJECT}, {"Key": "Name", "Value": f"{PROJECT}-{label}"}]
+		market = (
+			{"InstanceMarketOptions": {"MarketType": "spot", "SpotOptions": {"SpotInstanceType": "one-time"}}}
+			if spot
+			else {}
+		)
 		response = self.ec2.run_instances(
+			SubnetId=subnet,
+			**market,
 			ImageId=ami,
 			InstanceType=instance_type,
 			MinCount=1,
@@ -241,6 +292,7 @@ def main(argv: list[str]) -> None:
 	launch.add_argument("--disk", type=int, default=1200)
 	launch.add_argument("--flavor", choices=sorted(AMI_PARAMETERS), default="cpu")
 	launch.add_argument("--ref", default="main")
+	launch.add_argument("--spot", action="store_true", help="Use spot capacity (cheaper; may be interrupted)")
 	for name in ("wait", "stop", "start", "terminate"):
 		sub.add_parser(name).add_argument("instance_id")
 	args = parser.parse_args(argv)
@@ -253,7 +305,7 @@ def main(argv: list[str]) -> None:
 	elif args.command == "allow-ip":
 		infra.allow_ip(args.cidr)
 	elif args.command == "launch":
-		instance_id = infra.launch(args.label, args.type, args.disk, args.flavor, args.ref)
+		instance_id = infra.launch(args.label, args.type, args.disk, args.flavor, args.ref, args.spot)
 		print(f"ssh -i {KEY_PATH} ubuntu@{infra.wait(instance_id)}")
 	elif args.command == "wait":
 		print(infra.wait(args.instance_id))
