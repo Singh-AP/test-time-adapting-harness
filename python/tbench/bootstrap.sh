@@ -37,6 +37,8 @@ PY
 systemctl enable docker
 systemctl restart docker
 usermod -aG docker ubuntu
+# Harbor probes nftables support with this image under a 30 s timeout; pull it now so the probe never times out.
+docker pull -q alpine:3.23.4@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11 || true
 
 cat > /etc/security/limits.d/90-tta.conf <<'LIMITS'
 * soft nofile 1048576
