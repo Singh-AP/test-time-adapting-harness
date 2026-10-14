@@ -59,4 +59,12 @@ sudo -u ubuntu -H bash -lc "
 	uv venv -q --python 3.12 .venv-harbor
 	uv pip install -q --python .venv-harbor/bin/python '$HARBOR_SPEC'
 "
+# pi recognizes Bedrock credentials through AWS_PROFILE; this profile serves the instance role via IMDSv2.
+install -d -o ubuntu -g ubuntu /home/ubuntu/.aws
+cat > /home/ubuntu/.aws/config <<'CFG'
+[profile tta-instance]
+credential_process = python3 /home/ubuntu/tta/python/tbench/imds_credentials.py
+region = us-east-1
+CFG
+chown ubuntu:ubuntu /home/ubuntu/.aws/config
 touch /var/lib/tta-bootstrap-done
