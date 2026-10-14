@@ -361,6 +361,28 @@ Versions:
    `OCP.collections`. This is upstream drift, not our environment.
 6. Never pipe `npm run check` or `npm test` into `tail` inside an `&&` chain: the pipe hides the failure, and a
    commit went in with a tsc error once.
+8. **Harbor's Docker exec merges stderr into stdout** (`stderr=asyncio.subprocess.STDOUT`). The first bash wrapper
+   printed its status to stderr, so every command looked like a timeout. The first `v0-sonnet` and `v1-sonnet` runs
+   were killed and discarded for this reason. The status is now the last line of stdout, and
+   `test/tbench-remote.test.ts` covers merged streams.
+9. **Tool layer self-test.** `--ak self_test=true --disable-verification` makes no model calls and checks streams,
+   exit codes, timeouts, background jobs, truncation, file transfer and MCP in every task image. Run it on a host
+   before any paid run; it passed on 62 of 63 images, and the remaining failure was a flaky sidecar start.
+10. **docker cp broke tasks with non-root users** (`USER nobody`, `USER agent`): the files came out root-owned with
+    mode 0600. Uploads and downloads now go through exec as the task's default user (chunked base64,
+    `python/tbench/harbor_agent.py`).
+11. **Tasks with skills or MCP servers** (`cumulative-layout-shift`, `medical-claims-processing`) fail unless the
+    agent declares `capabilities = AgentCapabilities(skills=True, mcp_servers=True)`.
+    - Skills are listed in the first message.
+    - MCP over SSE connects from the host to the sidecar's container IP, which is resolved with `getent` in the main
+      container. The original Host header is kept (`src/tbench/mcp.ts`).
+12. **Harbor patches** (`python/tbench/harbor_patches.py`, applied when Harbor imports the agent):
+    - the egress-control kernel probe is retried and its success cached;
+    - verifier logs are chowned to the host user before the reward is read. Without this, `fp8-rmsnorm-gemm` raised
+      a PermissionError although its tests had passed.
+13. Harbor retries: run benchmark jobs with `--max-retries 2 --retry-include RuntimeError`, which retries
+    environment start failures such as flaky sidecars.
+14. The Bash tool caps a single call at 10 minutes, so poll long waits in steps of 280 s or less.
 7. Docker Hub allows anonymous pulls at 100 per hour per IP. With 132 images, prefer resizing a host that already
    has them (stop, modify-instance-attribute, start) over launching a new one.
 
@@ -368,6 +390,7 @@ Versions:
 
 - Oracle on 53 CPU tasks: all pass except `cad-model` (upstream), `live-database-cutover`, and the two network-probe
   failures, which are being re-run with the remaining oracle tasks.
-- Smoke run of v0 (Sonnet-free, Opus high) on `session-window-debug`: 5/7 tests passed, reward 0, $0.32, 2 minutes.
-  The agent stopped with self-declared "known gaps".
+- Smoke run of v0 (Opus 5.5 at high thinking) on `session-window-debug`: 5/7 tests passed, reward 0, $0.32,
+  2 minutes. The agent stopped with self-declared "known gaps". This was also before the status-parsing fix
+  (pitfall 8).
 - Running: `v0-sonnet` and `v1-sonnet` on all 63 CPU tasks (k=1, n=32 each), plus `oracle-rest` and `oracle-gpu`.
