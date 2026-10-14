@@ -25,6 +25,8 @@ PROJECT = "tta-tbench"
 ROLE_NAME = "tta-tbench-runner"
 KEY_NAME = "tta-tbench"
 SECURITY_GROUP = "tta-tbench-ssh"
+ENDPOINT_GROUP = "tta-tbench-endpoints"
+INTERFACE_ENDPOINTS = ["bedrock-runtime", "ssm", "ssmmessages", "ec2messages"]
 KEY_PATH = pathlib.Path("~/.ssh/tta-tbench.pem").expanduser()
 REPO_URL = "https://github.com/Singh-AP/test-time-adapting-harness.git"
 HARBOR_SPEC = "harbor[ec2]==0.24.0"
@@ -54,6 +56,26 @@ def runner_policy(account: str) -> dict[str, Any]:
 					"arn:aws:bedrock:*::foundation-model/*",
 					f"arn:aws:bedrock:*:{account}:inference-profile/*",
 				],
+			}
+		],
+	}
+
+
+def bucket_name(account: str, region: str) -> str:
+	"""Per-region artifact bucket: code bundles in, job results out, through an S3 gateway endpoint."""
+	return f"{PROJECT}-{account}-{region}"
+
+
+def artifact_policy(account: str) -> dict[str, Any]:
+	"""Inline policy for the host role: read and write objects in the project's artifact buckets only."""
+	return {
+		"Version": "2012-10-17",
+		"Statement": [
+			{
+				"Sid": "ProjectArtifacts",
+				"Effect": "Allow",
+				"Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket", "s3:GetBucketLocation"],
+				"Resource": [f"arn:aws:s3:::{PROJECT}-{account}-*", f"arn:aws:s3:::{PROJECT}-{account}-*/*"],
 			}
 		],
 	}
@@ -192,6 +214,95 @@ class Infra:
 		)
 		print(f"allowed SSH from {cidr}")
 
+	# --- private access (works under VPC Block Public Access) ----------------------------------------------------
+	def ensure_private_access(self) -> None:
+		"""Interface endpoints for Bedrock and SSM, an S3 gateway endpoint, an artifact bucket, and the role permissions
+		that go with them, in the subnets of this region's project hosts."""
+		s3 = self.session.client("s3")
+		bucket = bucket_name(self.account, self.region)
+		try:
+			s3.head_bucket(Bucket=bucket)
+		except s3.exceptions.ClientError:
+			kwargs: dict[str, Any] = {"Bucket": bucket}
+			if self.region != "us-east-1":
+				kwargs["CreateBucketConfiguration"] = {"LocationConstraint": self.region}
+			s3.create_bucket(**kwargs)
+			print(f"created bucket {bucket}")
+		s3.put_public_access_block(
+			Bucket=bucket,
+			PublicAccessBlockConfiguration={
+				"BlockPublicAcls": True,
+				"IgnorePublicAcls": True,
+				"BlockPublicPolicy": True,
+				"RestrictPublicBuckets": True,
+			},
+		)
+		s3.put_bucket_tagging(Bucket=bucket, Tagging={"TagSet": [{"Key": "Project", "Value": PROJECT}]})
+
+		attached = self.iam.list_attached_role_policies(RoleName=ROLE_NAME)["AttachedPolicies"]
+		ssm_core = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+		if not any(p["PolicyArn"] == ssm_core for p in attached):
+			self.iam.attach_role_policy(RoleName=ROLE_NAME, PolicyArn=ssm_core)
+			print("attached AmazonSSMManagedInstanceCore to the host role")
+		self.iam.put_role_policy(
+			RoleName=ROLE_NAME, PolicyName="project-artifacts", PolicyDocument=json.dumps(artifact_policy(self.account))
+		)
+
+		vpc = self.default_vpc()
+		cidr = self.ec2.describe_vpcs(VpcIds=[vpc])["Vpcs"][0]["CidrBlock"]
+		subnets = sorted({i["SubnetId"] for i in self.instances() if i["State"]["Name"] in ("pending", "running", "stopped")})
+		if not subnets:
+			raise SystemExit("no project hosts in this region; launch one first")
+		groups = self.ec2.describe_security_groups(
+			Filters=[{"Name": "group-name", "Values": [ENDPOINT_GROUP]}, {"Name": "vpc-id", "Values": [vpc]}]
+		)["SecurityGroups"]
+		if groups:
+			group = groups[0]["GroupId"]
+		else:
+			group = self.ec2.create_security_group(
+				GroupName=ENDPOINT_GROUP,
+				Description="HTTPS from the VPC to interface endpoints for Terminal-Bench hosts",
+				VpcId=vpc,
+				TagSpecifications=[{"ResourceType": "security-group", "Tags": [{"Key": "Project", "Value": PROJECT}]}],
+			)["GroupId"]
+			self.ec2.authorize_security_group_ingress(
+				GroupId=group, IpPermissions=[{"IpProtocol": "tcp", "FromPort": 443, "ToPort": 443, "IpRanges": [{"CidrIp": cidr}]}]
+			)
+			print(f"created endpoint security group {group}")
+		existing = {
+			e["ServiceName"]: e
+			for e in self.ec2.describe_vpc_endpoints(Filters=[{"Name": "vpc-id", "Values": [vpc]}])["VpcEndpoints"]
+			if e["State"].lower() not in ("deleted", "deleting", "failed", "rejected")
+		}
+		tags = [{"ResourceType": "vpc-endpoint", "Tags": [{"Key": "Project", "Value": PROJECT}]}]
+		for service in INTERFACE_ENDPOINTS:
+			name = f"com.amazonaws.{self.region}.{service}"
+			endpoint = existing.get(name)
+			if endpoint is None:
+				created = self.ec2.create_vpc_endpoint(
+					VpcEndpointType="Interface",
+					VpcId=vpc,
+					ServiceName=name,
+					SubnetIds=subnets,
+					SecurityGroupIds=[group],
+					PrivateDnsEnabled=True,
+					TagSpecifications=tags,
+				)["VpcEndpoint"]
+				print(f"created interface endpoint {name} ({created['VpcEndpointId']})")
+			elif missing := sorted(set(subnets) - set(endpoint.get("SubnetIds", []))):
+				self.ec2.modify_vpc_endpoint(VpcEndpointId=endpoint["VpcEndpointId"], AddSubnetIds=missing)
+				print(f"added subnets {missing} to {name}")
+		s3_name = f"com.amazonaws.{self.region}.s3"
+		if not any(e["ServiceName"] == s3_name and e["VpcEndpointType"] == "Gateway" for e in existing.values()):
+			tables = [
+				t["RouteTableId"]
+				for t in self.ec2.describe_route_tables(Filters=[{"Name": "vpc-id", "Values": [vpc]}])["RouteTables"]
+			]
+			created = self.ec2.create_vpc_endpoint(
+				VpcEndpointType="Gateway", VpcId=vpc, ServiceName=s3_name, RouteTableIds=tables, TagSpecifications=tags
+			)["VpcEndpoint"]
+			print(f"created gateway endpoint {s3_name} ({created['VpcEndpointId']})")
+
 	# --- hosts ----------------------------------------------------------------------------------------------
 	def default_subnets(self, instance_type: str) -> list[str]:
 		"""Default-VPC subnets in the availability zones that offer `instance_type`."""
@@ -286,6 +397,7 @@ def main(argv: list[str]) -> None:
 	sub.add_parser("setup")
 	sub.add_parser("allow-ip").add_argument("--cidr", help="CIDR to allow (default: current egress IP /32)")
 	sub.add_parser("list")
+	sub.add_parser("private-access", help="VPC endpoints, artifact bucket and role permissions (works under BPA)")
 	launch = sub.add_parser("launch")
 	launch.add_argument("--label", required=True)
 	launch.add_argument("--type", default="m7i.8xlarge")
@@ -302,6 +414,8 @@ def main(argv: list[str]) -> None:
 		infra.ensure_role()
 		infra.ensure_key()
 		infra.allow_ip()
+	elif args.command == "private-access":
+		infra.ensure_private_access()
 	elif args.command == "allow-ip":
 		infra.allow_ip(args.cidr)
 	elif args.command == "launch":

@@ -44,5 +44,22 @@ class SafetyTests(unittest.TestCase):
 		self.assertFalse(aws_infra.is_project_instance(untagged))
 
 
+
+class PrivateAccessTests(unittest.TestCase):
+	def test_bucket_name_is_per_account_and_region(self):
+		self.assertEqual(aws_infra.bucket_name("123456789012", "us-east-2"), "tta-tbench-123456789012-us-east-2")
+
+	def test_artifact_policy_is_limited_to_project_buckets(self):
+		policy = aws_infra.artifact_policy("123456789012")
+		resources = {r for s in policy["Statement"] for r in s["Resource"]}
+		self.assertEqual(
+			resources,
+			{"arn:aws:s3:::tta-tbench-123456789012-*", "arn:aws:s3:::tta-tbench-123456789012-*/*"},
+		)
+		actions = {a for s in policy["Statement"] for a in s["Action"]}
+		self.assertTrue(all(a.startswith("s3:") for a in actions))
+		self.assertNotIn("s3:DeleteBucket", actions)
+
+
 if __name__ == "__main__":
 	unittest.main()

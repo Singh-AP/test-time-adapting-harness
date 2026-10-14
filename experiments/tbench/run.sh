@@ -8,6 +8,12 @@ job=$1 harness=$2 model=$3 subset=$4 gpu=$5 n=$6
 shift 6
 read -r -a filters <<< "$(python3 experiments/tbench/split.py select experiments/tbench/splits/tb4.json "$subset" --gpu "$gpu")"
 ulimit -n 65536 2>/dev/null || true
+# Bedrock calls go to this host's region (a VPC endpoint under Block Public Access).
+if [ -z "${AWS_REGION:-}" ]; then
+	token=$(curl -s -m 2 -X PUT -H "X-aws-ec2-metadata-token-ttl-seconds: 60" http://169.254.169.254/latest/api/token || true)
+	AWS_REGION=$(curl -s -m 2 -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/placement/region || true)
+	export AWS_REGION=${AWS_REGION:-us-east-1}
+fi
 git rev-parse --short HEAD > "$HOME/jobs/$job.commit" 2>/dev/null || true
 PYTHONPATH="$PWD" exec .venv-harbor/bin/harbor run -d terminal-bench/terminal-bench@4.0.0 -e docker \
 	-a python.tbench.harbor_agent:PiHarnessAgent -m "$model" --ak harness="$harness" \
