@@ -18,11 +18,11 @@ import os
 import pathlib
 import posixpath
 import shlex
-import tempfile
 import tomllib
 from typing import Any
 
 from harbor.agents.base import BaseAgent
+from harbor.agents.capabilities import AgentCapabilities
 from harbor.agents.options import AgentOptions
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
@@ -32,6 +32,8 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 MAIN_TS = REPO_ROOT / "src" / "tbench" / "main.ts"
 HARBOR_CACHE = pathlib.Path("~/.cache/harbor/tasks").expanduser()
 _STREAM_LIMIT = 1 << 30
+_UPLOAD_CHUNK = 60_000  # base64 characters per exec, a multiple of 4; Linux limits one argument to 128 KiB
+_DOWNLOAD_LIMIT = 30 * 1024 * 1024
 
 
 def bedrock_model_id(model_name: str) -> str:
@@ -139,23 +141,47 @@ class BridgeServer:
 			r = await self.environment.exec(str(message["command"]), timeout_sec=int(timeout) if timeout else None)
 			return {"stdout": r.stdout or "", "stderr": r.stderr or "", "return_code": r.return_code}
 		if op == "upload":
-			path = str(message["path"])
-			with tempfile.NamedTemporaryFile(delete=False) as handle:
-				handle.write(base64.b64decode(message.get("content_b64") or ""))
-			try:
-				parent = posixpath.dirname(path)
-				if parent:
-					await self.environment.exec(f"mkdir -p {shlex.quote(parent)}", timeout_sec=60)
-				await self.environment.upload_file(handle.name, path)
-			finally:
-				os.unlink(handle.name)
+			await self._upload(str(message["path"]), str(message.get("content_b64") or ""))
 			return {}
 		if op == "download":
-			with tempfile.TemporaryDirectory() as tmp:
-				target = pathlib.Path(tmp) / "file"
-				await self.environment.download_file(str(message["path"]), target)
-				return {"content_b64": base64.b64encode(target.read_bytes()).decode()}
+			return {"content_b64": await self._download(str(message["path"]))}
 		raise ValueError(f"unknown op {op!r}")
+
+
+	# Files move through exec as the task's default user, not docker cp: docker cp writes root-owned files with the
+	# temp file's 0600 mode (unreadable for non-root task users) and cannot write into tmpfs mounts.
+	async def _upload(self, path: str, data_b64: str) -> None:
+		quoted = shlex.quote(path)
+		parent = posixpath.dirname(path)
+		prefix = f"mkdir -p {shlex.quote(parent)} && " if parent else ""
+		chunks = [data_b64[i : i + _UPLOAD_CHUNK] for i in range(0, len(data_b64), _UPLOAD_CHUNK)] or [""]
+		for index, chunk in enumerate(chunks):
+			redirect = ">" if index == 0 else ">>"
+			command = f"printf '%s' '{chunk}' | base64 -d {redirect} {quoted}" if chunk else f": > {quoted}"
+			r = await self.environment.exec((prefix if index == 0 else "") + command, timeout_sec=120)
+			if r.return_code != 0:
+				raise OSError(f"cannot write {path}: {(r.stdout or '') + (r.stderr or '')}".strip())
+
+	async def _download(self, path: str) -> str:
+		quoted = shlex.quote(path)
+		command = (
+			f"if [ -d {quoted} ]; then echo __TTA_ISDIR__; exit 3; fi; "
+			f"if [ ! -r {quoted} ]; then echo __TTA_NOFILE__; exit 3; fi; "
+			f"size=$(wc -c < {quoted}); if [ \"$size\" -gt {_DOWNLOAD_LIMIT} ]; then echo __TTA_TOOBIG__ $size; exit 4; fi; "
+			f"printf '__TTA_B64_START__'; base64 < {quoted} | tr -d '\\n'; printf '__TTA_B64_END__'"
+		)
+		r = await self.environment.exec(command, timeout_sec=300)
+		out = (r.stdout or "") + (r.stderr or "")
+		if "__TTA_ISDIR__" in out:
+			raise IsADirectoryError(f"{path} is a directory")
+		if "__TTA_NOFILE__" in out:
+			raise FileNotFoundError(f"no such file or not readable: {path}")
+		if "__TTA_TOOBIG__" in out:
+			raise OSError(f"{path} is larger than {_DOWNLOAD_LIMIT} bytes; inspect it with bash (head, sed, grep)")
+		start, end = out.find("__TTA_B64_START__"), out.find("__TTA_B64_END__")
+		if r.return_code != 0 or start < 0 or end < start:
+			raise OSError(f"cannot read {path}: {out[:500]}")
+		return out[start + len("__TTA_B64_START__") : end]
 
 
 class PiHarnessOptions(AgentOptions):
@@ -171,6 +197,7 @@ class PiHarnessOptions(AgentOptions):
 
 class PiHarnessAgent(BaseAgent):
 	options_model = PiHarnessOptions
+	capabilities = AgentCapabilities(skills=True, mcp_servers=True)
 
 	@staticmethod
 	def name() -> str:
@@ -199,6 +226,10 @@ class PiHarnessAgent(BaseAgent):
 			config["thinkingLevel"] = options.thinking
 		if options.self_test:
 			config["selfTest"] = True
+		if self.skills_dir:
+			config["skillsDir"] = self.skills_dir
+		if self.mcp_servers:
+			config["mcpServers"] = [server.model_dump(mode="json") for server in self.mcp_servers]
 		config_path = self.logs_dir / "agent-config.json"
 		config_path.write_text(json.dumps(config, indent=2))
 		env = {**os.environ, "AWS_REGION": os.environ.get("AWS_REGION", "us-east-1")}

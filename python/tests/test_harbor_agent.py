@@ -1,7 +1,7 @@
 import asyncio
+import base64
 import json
 import pathlib
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -53,15 +53,10 @@ class FakeEnvironment:
 		return ExecResult(stdout=proc.stdout, stderr=proc.stderr, return_code=proc.returncode)
 
 	async def upload_file(self, source_path, target_path):
-		target = self._local(target_path)
-		target.parent.mkdir(parents=True, exist_ok=True)
-		shutil.copy(source_path, target)
+		raise AssertionError("docker cp must not be used: files must be written as the task's default user")
 
 	async def download_file(self, source_path, target_path):
-		source = self._local(source_path)
-		if not source.exists():
-			raise FileNotFoundError(source_path)
-		shutil.copy(source, target_path)
+		raise AssertionError("docker cp must not be used: files must be read as the task's default user")
 
 
 class BridgeServerTests(unittest.TestCase):
@@ -91,6 +86,22 @@ class BridgeServerTests(unittest.TestCase):
 		self.assertEqual(context.n_output_tokens, 20)
 		self.assertEqual(context.cost_usd, 0.5)
 		self.assertEqual(context.metadata["stop_reason"], "completed")
+
+
+class LargeFileTests(unittest.TestCase):
+	def test_large_binary_files_round_trip_in_chunks(self):
+		async def scenario():
+			with tempfile.TemporaryDirectory() as tmp:
+				root = pathlib.Path(tmp)
+				server = harbor_agent.BridgeServer(FakeEnvironment(root), None, AgentContext())  # type: ignore[arg-type]
+				payload = bytes(range(256)) * 1200
+				await server._dispatch({"op": "upload", "path": "/work/big.bin", "content_b64": base64.b64encode(payload).decode()})
+				down = await server._dispatch({"op": "download", "path": "/work/big.bin"})
+				return payload, base64.b64decode(down["content_b64"])
+
+		payload, back = asyncio.run(scenario())
+		self.assertEqual(len(back), len(payload))
+		self.assertEqual(back, payload)
 
 
 class TimeoutTests(unittest.TestCase):

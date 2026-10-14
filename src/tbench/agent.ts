@@ -16,7 +16,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { clip, errorMessage } from "../util/text.ts";
 import { type BashSettings, formatDuration, type Harness, type ReviewSettings, renderTemplate } from "./harness.ts";
-import { type RemoteEnvironment, RemoteShell, remoteFileOperations } from "./remote.ts";
+import { type RemoteEnvironment, RemoteShell, remoteFileOperations, shellQuote } from "./remote.ts";
 
 export interface AgentUsage {
 	turns: number;
@@ -43,6 +43,18 @@ export interface TerminalAgentOptions {
 	/** Local directory for the transcript, session JSONL and result. */
 	logsDir?: string;
 	onUsage?: (usage: AgentUsage) => void;
+	/** Container directory with task-provided skills (one subdirectory with SKILL.md per skill). */
+	skillsDir?: string;
+	/** Task-provided MCP servers (Harbor's MCPServerConfig). */
+	mcpServers?: McpServer[];
+}
+
+export interface McpServer {
+	name: string;
+	transport: string;
+	url?: string | null;
+	command?: string | null;
+	args?: string[];
 }
 
 export interface ReviewRecord {
@@ -138,6 +150,42 @@ export function renderTranscript(messages: readonly unknown[]): string {
 		.join("\n\n");
 }
 
+/** Lists task-provided skills (from each SKILL.md's front matter) and MCP servers for the first message. */
+async function taskExtras(shell: RemoteShell, skillsDir: string | undefined, servers: McpServer[]): Promise<string> {
+	const parts: string[] = [];
+	if (skillsDir) {
+		const listing = await shell
+			.run(
+				`for f in ${shellQuote(skillsDir)}/*/SKILL.md; do [ -f "$f" ] && { echo "@@ $f"; head -n 15 "$f"; }; done`,
+				60,
+			)
+			.catch(() => undefined);
+		const skills = (listing?.output ?? "")
+			.split("@@ ")
+			.filter((block) => block.trim())
+			.map((block) => {
+				const [path, ...lines] = block.split("\n");
+				const field = (key: string) =>
+					lines
+						.find((l) => l.toLowerCase().startsWith(`${key}:`))
+						?.slice(key.length + 1)
+						.trim();
+				return `- ${field("name") ?? path.split("/").at(-2)}: ${field("description") ?? "(no description)"} (${path.trim()})`;
+			});
+		if (skills.length)
+			parts.push(
+				`Skills provided with this task (read a skill's SKILL.md fully before relying on it):\n${skills.join("\n")}`,
+			);
+	}
+	if (servers.length)
+		parts.push(
+			`MCP servers provided with this task:\n${servers
+				.map((m) => `- ${m.name}: ${m.transport} ${m.url ?? [m.command, ...(m.args ?? [])].join(" ")}`)
+				.join("\n")}`,
+		);
+	return parts.join("\n\n");
+}
+
 /** Runs one Terminal-Bench task: the pi agent on the host, its tools in the task container. */
 export async function runTerminalAgent(o: TerminalAgentOptions): Promise<TerminalAgentResult> {
 	const started = Date.now();
@@ -166,6 +214,9 @@ export async function runTerminalAgent(o: TerminalAgentOptions): Promise<Termina
 			errors.push(`probe failed: ${errorMessage(error)}`);
 		}
 	}
+
+	const extras = await taskExtras(shell, o.skillsDir, o.mcpServers ?? []);
+	if (extras) environment = `${environment}\n\n${extras}`.trim();
 
 	const files = remoteFileOperations(o.env);
 	const read = createReadToolDefinition(cwd, { operations: files.read });

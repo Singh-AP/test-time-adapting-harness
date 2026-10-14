@@ -120,6 +120,38 @@ describe("runTerminalAgent", () => {
 	});
 });
 
+describe("task-provided skills and MCP servers", () => {
+	test("are listed in the first message", async () => {
+		const { env, root } = await localEnvironment();
+		const skills = join(root, "skills", "chart-maker");
+		await run("mkdir", ["-p", skills]);
+		await writeFile(
+			join(skills, "SKILL.md"),
+			"---\nname: chart-maker\ndescription: Builds charts from CSV files.\n---\n# Chart maker\nDetails...\n",
+		);
+		const { runtime, model } = await fauxRuntime([fauxAssistantMessage([fauxText("Done.")])]);
+		const logsDir = await mkdtemp(join(tmpdir(), "tta-skills-logs-"));
+		await runTerminalAgent({
+			instruction: "x",
+			env,
+			runtime,
+			model,
+			harness: testHarness({ finishCheck: "" }),
+			timeBudgetSec: 600,
+			cwd: root,
+			logsDir,
+			skillsDir: join(root, "skills"),
+			mcpServers: [{ name: "browser", transport: "sse", url: "http://browser:3080/sse" }],
+		});
+		const transcript = await readFile(join(logsDir, "transcript.md"), "utf8");
+		expect(transcript).toContain("chart-maker");
+		expect(transcript).toContain("Builds charts from CSV files.");
+		expect(transcript).toContain(join(skills, "SKILL.md"));
+		expect(transcript).toContain("browser");
+		expect(transcript).toContain("http://browser:3080/sse");
+	});
+});
+
 describe("independent review", () => {
 	test("a failed review sends the issues back to the agent until a review passes", async () => {
 		const { env, root } = await localEnvironment();

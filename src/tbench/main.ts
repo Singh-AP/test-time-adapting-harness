@@ -8,7 +8,7 @@ import { join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { errorMessage } from "../util/text.ts";
-import { runTerminalAgent } from "./agent.ts";
+import { type McpServer, runTerminalAgent } from "./agent.ts";
 import { HarborBridge } from "./bridge.ts";
 import { loadHarness } from "./harness.ts";
 import { bridgeEnvironment } from "./remote.ts";
@@ -23,6 +23,8 @@ interface AgentConfig {
 	thinkingLevel?: ThinkingLevel | "off";
 	/** Exercise the tool layer in the container without model calls (see selftest.ts). */
 	selfTest?: boolean;
+	skillsDir?: string;
+	mcpServers?: McpServer[];
 }
 
 async function main(): Promise<void> {
@@ -59,6 +61,8 @@ async function main(): Promise<void> {
 		harness,
 		timeBudgetSec: config.timeBudgetSec,
 		logsDir: config.logsDir,
+		skillsDir: config.skillsDir,
+		mcpServers: config.mcpServers,
 		onUsage: (usage) => bridge.emit("usage", { ...usage }),
 	});
 	bridge.emit("done", { ...result });
