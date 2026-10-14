@@ -17,3 +17,4 @@ Observations across versions (dev only):
 - About five tasks flip between runs of the same harness, so differences of one or two tasks between versions are noise.
 - The independent reviewer returns PASS on most failed runs and costs about 30% extra.
 | v5 | v3 | pending | Proposer from v3's dev trials: tie-breakers for judgment calls (prefer the reading under which the goal works out, the field's standard method, the general case, the strict reading of prohibitions); a near miss or tie means something is still wrong; "the original code did it this way" is not evidence; a summary that needs a limitations section means the work is not done. |
+| v6 | v5 | pending | v5 plus the v4 reviewer with the targeted checklist. |
