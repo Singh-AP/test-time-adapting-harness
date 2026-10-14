@@ -35,6 +35,36 @@ async function localEnvironment() {
 	return { env, root, commands, uploads };
 }
 
+/** Like Harbor's Docker environment: stderr is merged into stdout (docker compose exec, stderr=STDOUT). */
+async function mergedEnvironment() {
+	const local = await localEnvironment();
+	const env: RemoteEnvironment = {
+		...local.env,
+		exec: async (command, timeoutSec) => {
+			const r = await local.env.exec(command, timeoutSec);
+			return { stdout: `${r.stderr}${r.stdout}`, stderr: "", returnCode: r.returnCode };
+		},
+	};
+	return { ...local, env };
+}
+
+describe("RemoteShell with merged output streams", () => {
+	test("parses the status and hides the status line when stderr is merged into stdout", async () => {
+		const { env, root } = await mergedEnvironment();
+		const shell = new RemoteShell(env, { cwd: root, stateDir: join(root, ".tta") });
+		const ok = await shell.run("echo out; echo err >&2", 30);
+		expect(ok.exitCode).toBe(0);
+		expect(ok.timedOut).toBe(false);
+		expect(ok.output).toContain("out");
+		expect(ok.output).toContain("err");
+		expect(ok.output).not.toContain("__TTA_STATUS__");
+		const failed = await shell.run("echo bad; exit 7", 30);
+		expect(failed.exitCode).toBe(7);
+		expect(failed.timedOut).toBe(false);
+		expect(failed.output).not.toContain("__TTA_STATUS__");
+	});
+});
+
 describe("RemoteShell", () => {
 	test("runs a command in the working directory and reports output and exit code", async () => {
 		const { env, root } = await localEnvironment();
@@ -101,4 +131,14 @@ describe("remote file operations", () => {
 		const { env, root } = await localEnvironment();
 		await expect(remoteFileOperations(env).read.access(join(root, "missing.txt"))).rejects.toThrow();
 	});
+});
+
+describe("runSelfTest", () => {
+	test("all checks pass on a Harbor-like environment with merged streams", async () => {
+		const { runSelfTest } = await import("../src/tbench/selftest.ts");
+		const { env, root } = await mergedEnvironment();
+		const checks = await runSelfTest(env, root);
+		expect(checks.filter((c) => !c.ok)).toEqual([]);
+		expect(checks.length).toBe(7);
+	}, 60_000);
 });

@@ -163,6 +163,7 @@ class PiHarnessOptions(AgentOptions):
 	thinking: str | None = Field(default=None, description="Override the harness thinking level.")
 	time_budget_sec: float | None = Field(default=None, description="Agent time budget; default: the task timeout.")
 	node: str = Field(default="node", description="Node.js executable.")
+	self_test: bool = Field(default=False, description="Exercise the tool layer in the container, no model calls.")
 	aws_profile: str = Field(
 		default="tta-instance", description="AWS profile for Bedrock when AWS_PROFILE is unset (runner hosts)."
 	)
@@ -196,6 +197,8 @@ class PiHarnessAgent(BaseAgent):
 		}
 		if options.thinking:
 			config["thinkingLevel"] = options.thinking
+		if options.self_test:
+			config["selfTest"] = True
 		config_path = self.logs_dir / "agent-config.json"
 		config_path.write_text(json.dumps(config, indent=2))
 		env = {**os.environ, "AWS_REGION": os.environ.get("AWS_REGION", "us-east-1")}

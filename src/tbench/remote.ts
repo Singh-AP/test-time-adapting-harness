@@ -118,18 +118,20 @@ export class RemoteShell {
 			"fi",
 			"timed=0",
 			`if [ "$elapsed" -ge ${t} ] && { [ "$code" = 124 ] || [ "$code" = 137 ]; }; then timed=1; fi`,
-			`echo "${STATUS} $code $timed $elapsed" >&2`,
+			// Harbor's Docker environment merges stderr into stdout, so the status is the last line of stdout.
+			`printf '\\n${STATUS} %s %s %s\\n' "$code" "$timed" "$elapsed"`,
 		]
 			.filter(Boolean)
 			.join("\n");
 		const r = await this.env.exec(script, t + this.o.graceSec);
-		const status = new RegExp(`${STATUS} (\\d+) ([01]) (\\d+)`).exec(r.stderr);
-		if (!status) {
-			const detail = [r.stdout, r.stderr].filter(Boolean).join("\n").trim();
-			return { output: detail, exitCode: r.returnCode || 1, timedOut: true, elapsedSec: t, logPath };
-		}
+		const combined = r.stderr ? `${r.stdout}\n${r.stderr}` : r.stdout;
+		const matches = [...combined.matchAll(new RegExp(`\\n?${STATUS} (\\d+) ([01]) (\\d+)\\n?`, "g"))];
+		const output = combined.replace(new RegExp(`\\n?${STATUS} \\d+ [01] \\d+\\n?`, "g"), "");
+		const status = matches.at(-1);
+		if (!status)
+			return { output: output.trim(), exitCode: r.returnCode || 1, timedOut: true, elapsedSec: t, logPath };
 		return {
-			output: r.stdout,
+			output,
 			exitCode: Number(status[1]),
 			timedOut: status[2] === "1",
 			elapsedSec: Number(status[3]),
