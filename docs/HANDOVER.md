@@ -361,10 +361,12 @@ Versions:
    `OCP.collections`. This is upstream drift, not our environment.
 6. Never pipe `npm run check` or `npm test` into `tail` inside an `&&` chain: the pipe hides the failure, and a
    commit went in with a tsc error once.
-8. **Harbor's Docker exec merges stderr into stdout** (`stderr=asyncio.subprocess.STDOUT`). The first bash wrapper
+7. **Harbor's Docker exec merges stderr into stdout** (`stderr=asyncio.subprocess.STDOUT`). The first bash wrapper
    printed its status to stderr, so every command looked like a timeout. The first `v0-sonnet` and `v1-sonnet` runs
    were killed and discarded for this reason. The status is now the last line of stdout, and
    `test/tbench-remote.test.ts` covers merged streams.
+8. Docker Hub allows anonymous pulls at 100 per hour per IP. With 132 images, prefer resizing a host that already
+   has them (stop, modify-instance-attribute, start) over launching a new one.
 9. **Tool layer self-test.** `--ak self_test=true --disable-verification` makes no model calls and checks streams,
    exit codes, timeouts, background jobs, truncation, file transfer and MCP in every task image. Run it on a host
    before any paid run; it passed on 62 of 63 images, and the remaining failure was a flaky sidecar start.
@@ -383,8 +385,6 @@ Versions:
 13. Harbor retries: run benchmark jobs with `--max-retries 2 --retry-include RuntimeError`, which retries
     environment start failures such as flaky sidecars.
 14. The Bash tool caps a single call at 10 minutes, so poll long waits in steps of 280 s or less.
-7. Docker Hub allows anonymous pulls at 100 per hour per IP. With 132 images, prefer resizing a host that already
-   has them (stop, modify-instance-attribute, start) over launching a new one.
 
 **Status at writing.**
 
@@ -392,5 +392,5 @@ Versions:
   failures, which are being re-run with the remaining oracle tasks.
 - Smoke run of v0 (Opus 5.5 at high thinking) on `session-window-debug`: 5/7 tests passed, reward 0, $0.32,
   2 minutes. The agent stopped with self-declared "known gaps". This was also before the status-parsing fix
-  (pitfall 8).
+  (pitfall 7).
 - Running: `v0-sonnet` and `v1-sonnet` on all 63 CPU tasks (k=1, n=32 each), plus `oracle-rest` and `oracle-gpu`.
