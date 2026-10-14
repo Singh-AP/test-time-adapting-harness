@@ -15,7 +15,7 @@ import {
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { clip, errorMessage } from "../util/text.ts";
-import { type BashSettings, formatDuration, type Harness, renderTemplate } from "./harness.ts";
+import { type BashSettings, formatDuration, type Harness, type ReviewSettings, renderTemplate } from "./harness.ts";
 import { type RemoteEnvironment, RemoteShell, remoteFileOperations } from "./remote.ts";
 
 export interface AgentUsage {
@@ -45,9 +45,19 @@ export interface TerminalAgentOptions {
 	onUsage?: (usage: AgentUsage) => void;
 }
 
+export interface ReviewRecord {
+	round: number;
+	verdict: "pass" | "fail" | "none";
+	/** A review without a FAIL verdict counts as passing: there is nothing actionable to send back. */
+	pass: boolean;
+	issues: string;
+	cost: number;
+}
+
 export interface TerminalAgentResult extends AgentUsage {
 	stopReason: "completed" | "deadline" | "error";
 	finishChecks: number;
+	reviews: ReviewRecord[];
 	finalText: string;
 	errors: string[];
 	elapsedSec: number;
@@ -158,29 +168,38 @@ export async function runTerminalAgent(o: TerminalAgentOptions): Promise<Termina
 	}
 
 	const files = remoteFileOperations(o.env);
+	const read = createReadToolDefinition(cwd, { operations: files.read });
 	const tools: ToolDefinition<any, any, any>[] = [
 		bashTool(shell, cwd, h.bash),
-		createReadToolDefinition(cwd, { operations: files.read }),
+		read,
 		createEditToolDefinition(cwd, { operations: files.edit }),
 		createWriteToolDefinition(cwd, { operations: files.write }),
 	];
 	const model = { ...o.model, contextWindow: Math.min(o.model.contextWindow, h.contextWindow) } as Model<Api>;
-	const { session } = await createAgentSession({
-		cwd,
-		agentDir: o.logsDir ? join(o.logsDir, ".pi") : undefined,
-		modelRuntime: o.runtime,
-		model,
-		thinkingLevel: h.thinkingLevel === "off" ? undefined : h.thinkingLevel,
-		noTools: "builtin",
-		tools: tools.map((t) => t.name),
-		customTools: tools,
-		resourceLoader: resources(h.systemPrompt),
-		sessionManager: SessionManager.inMemory(cwd),
-		settingsManager: SettingsManager.inMemory({
-			compaction: h.compaction,
-			retry: { enabled: true, maxRetries: 10, baseDelayMs: 2000, maxAgentDelayMs: 120_000 },
-		}),
-	});
+	const openSession = async (systemPrompt: string, sessionTools: ToolDefinition<any, any, any>[]) =>
+		(
+			await createAgentSession({
+				cwd,
+				agentDir: o.logsDir ? join(o.logsDir, ".pi") : undefined,
+				modelRuntime: o.runtime,
+				model,
+				thinkingLevel: h.thinkingLevel === "off" ? undefined : h.thinkingLevel,
+				noTools: "builtin",
+				tools: sessionTools.map((t) => t.name),
+				customTools: sessionTools,
+				resourceLoader: resources(systemPrompt),
+				sessionManager: SessionManager.inMemory(cwd),
+				settingsManager: SettingsManager.inMemory({
+					compaction: h.compaction,
+					retry: { enabled: true, maxRetries: 10, baseDelayMs: 2000, maxAgentDelayMs: 120_000 },
+					httpIdleTimeoutMs: 600_000,
+				}),
+			})
+		).session;
+	const session = await openSession(h.systemPrompt, tools);
+	/** The session the deadline aborts: the agent, or a reviewer while one runs. */
+	let active = session;
+	const reviewCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
 
 	let turns = 0;
 	let toolCalls = 0;
@@ -189,11 +208,11 @@ export async function runTerminalAgent(o: TerminalAgentOptions): Promise<Termina
 		return {
 			turns,
 			toolCalls,
-			input: stats.tokens.input,
-			output: stats.tokens.output,
-			cacheRead: stats.tokens.cacheRead,
-			cacheWrite: stats.tokens.cacheWrite,
-			cost: stats.cost,
+			input: stats.tokens.input + reviewCost.input,
+			output: stats.tokens.output + reviewCost.output,
+			cacheRead: stats.tokens.cacheRead + reviewCost.cacheRead,
+			cacheWrite: stats.tokens.cacheWrite + reviewCost.cacheWrite,
+			cost: stats.cost + reviewCost.cost,
 		};
 	};
 	let lastSave = 0;
@@ -217,7 +236,7 @@ export async function runTerminalAgent(o: TerminalAgentOptions): Promise<Termina
 	const deadlineTimer = setTimeout(
 		() => {
 			stopReason = "deadline";
-			void session.abort();
+			void active.abort();
 		},
 		Math.max(0, deadline - Date.now()),
 	);
@@ -226,7 +245,7 @@ export async function runTerminalAgent(o: TerminalAgentOptions): Promise<Termina
 		.map((fraction) =>
 			setTimeout(
 				() => {
-					if (stopReason !== "completed") return;
+					if (stopReason !== "completed" || active !== session) return;
 					void session
 						.steer(
 							`[harness] ${Math.round(fraction * 100)}% of the time budget is used; about ${formatDuration(remaining())} remain. Prioritize finishing and verifying the required outputs.`,
@@ -236,6 +255,50 @@ export async function runTerminalAgent(o: TerminalAgentOptions): Promise<Termina
 				Math.max(0, started + fraction * (deadline - started) - Date.now()),
 			),
 		);
+
+	const reviews: ReviewRecord[] = [];
+	const review = async (round: number): Promise<ReviewRecord> => {
+		const r = h.review as ReviewSettings;
+		const reviewer = await openSession(r.prompt, [bashTool(shell, cwd, h.bash), read]);
+		active = reviewer;
+		const request = renderTemplate(r.request, {
+			instruction: o.instruction,
+			summary: session.getLastAssistantText() ?? "(no summary)",
+			time_left: formatDuration(remaining()),
+		});
+		try {
+			await reviewer.prompt(request);
+		} finally {
+			active = session;
+		}
+		const text = reviewer.getLastAssistantText() ?? "";
+		const stats = reviewer.getSessionStats();
+		reviewCost.input += stats.tokens.input;
+		reviewCost.output += stats.tokens.output;
+		reviewCost.cacheRead += stats.tokens.cacheRead;
+		reviewCost.cacheWrite += stats.tokens.cacheWrite;
+		reviewCost.cost += stats.cost;
+		if (o.logsDir) {
+			await mkdir(o.logsDir, { recursive: true });
+			await writeFile(join(o.logsDir, `review-${round}.md`), `${renderTranscript(reviewer.messages)}\n`);
+		}
+		reviewer.dispose();
+		const verdict = /VERDICT:\s*(PASS|FAIL)/i.exec(text)?.[1]?.toUpperCase();
+		const issues =
+			verdict === "FAIL"
+				? text
+						.slice(text.search(/VERDICT:\s*FAIL/i))
+						.replace(/VERDICT:\s*FAIL\s*/i, "")
+						.trim()
+				: "";
+		return {
+			round,
+			verdict: verdict === "PASS" ? "pass" : verdict === "FAIL" ? "fail" : "none",
+			pass: verdict !== "FAIL",
+			issues,
+			cost: stats.cost,
+		};
+	};
 
 	let finishChecks = 0;
 	try {
@@ -250,6 +313,15 @@ export async function runTerminalAgent(o: TerminalAgentOptions): Promise<Termina
 			finishChecks++;
 			await session.prompt(renderTemplate(h.finishCheck, { time_left: formatDuration(remaining()) }));
 		}
+		for (let round = 1; h.review && round <= h.review.maxRounds; round++) {
+			if (stopReason !== "completed" || remaining() < Math.max(60, h.review.minTimeLeftSec)) break;
+			const record = await review(round);
+			reviews.push(record);
+			if (record.pass || stopReason !== "completed") break;
+			await session.prompt(
+				renderTemplate(h.review.followup, { issues: record.issues, time_left: formatDuration(remaining()) }),
+			);
+		}
 	} catch (error) {
 		if (stopReason === "completed") {
 			stopReason = "error";
@@ -263,6 +335,7 @@ export async function runTerminalAgent(o: TerminalAgentOptions): Promise<Termina
 		...usage(),
 		stopReason,
 		finishChecks,
+		reviews,
 		finalText: session.getLastAssistantText() ?? "",
 		errors,
 		elapsedSec: (Date.now() - started) / 1000,

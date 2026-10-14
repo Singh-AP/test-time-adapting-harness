@@ -2,6 +2,19 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
 
+/** An independent reviewer that audits the container after the agent finishes (fresh context, bash and read). */
+export interface ReviewSettings {
+	/** Reviewer system prompt. */
+	prompt: string;
+	/** Reviewer's first message; `{{instruction}}`, `{{summary}}`, `{{time_left}}` are replaced. */
+	request: string;
+	/** Sent to the agent after a failed review; `{{issues}}`, `{{time_left}}` are replaced. */
+	followup: string;
+	maxRounds: number;
+	/** Skip reviews when less time than this remains. */
+	minTimeLeftSec: number;
+}
+
 export interface BashSettings {
 	defaultTimeoutSec: number;
 	maxTimeoutSec: number;
@@ -30,6 +43,7 @@ export interface Harness {
 	compaction: { enabled: boolean; reserveTokens: number; keepRecentTokens: number };
 	/** Fractions of the time budget at which the agent is told how much time remains. */
 	timeWarnings: number[];
+	review?: ReviewSettings;
 }
 
 export const HARNESS_DEFAULTS: Omit<Harness, "name" | "systemPrompt" | "userPrompt" | "probe" | "finishCheck"> = {
@@ -50,7 +64,23 @@ async function optionalFile(path: string): Promise<string> {
 }
 
 export async function loadHarness(dir: string): Promise<Harness> {
-	const config = JSON.parse(await readFile(join(dir, "harness.json"), "utf8")) as Partial<Harness>;
+	const config = JSON.parse(await readFile(join(dir, "harness.json"), "utf8")) as Partial<Harness> & {
+		review?: Partial<ReviewSettings>;
+	};
+	const reviewPrompt = await optionalFile(join(dir, "review.md"));
+	const review: ReviewSettings | undefined = reviewPrompt
+		? {
+				prompt: reviewPrompt,
+				request:
+					(await optionalFile(join(dir, "review-request.md"))) ||
+					"# Task\n{{instruction}}\n\n# The agent's final summary\n{{summary}}",
+				followup:
+					(await optionalFile(join(dir, "review-followup.md"))) ||
+					"An independent reviewer found problems:\n\n{{issues}}\n\nVerify and fix them.",
+				maxRounds: config.review?.maxRounds ?? 2,
+				minTimeLeftSec: config.review?.minTimeLeftSec ?? 600,
+			}
+		: undefined;
 	return {
 		...HARNESS_DEFAULTS,
 		...config,
@@ -61,6 +91,7 @@ export async function loadHarness(dir: string): Promise<Harness> {
 		userPrompt: (await optionalFile(join(dir, "user.md"))) || "{{instruction}}",
 		probe: await optionalFile(join(dir, "probe.sh")),
 		finishCheck: await optionalFile(join(dir, "finish.md")),
+		review,
 	};
 }
 

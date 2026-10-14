@@ -120,6 +120,80 @@ describe("runTerminalAgent", () => {
 	});
 });
 
+describe("independent review", () => {
+	test("a failed review sends the issues back to the agent until a review passes", async () => {
+		const { env, root } = await localEnvironment();
+		const { runtime, model } = await fauxRuntime([
+			fauxAssistantMessage([fauxText("Done.")]),
+			fauxAssistantMessage([fauxToolCall("bash", { command: "ls" })], { stopReason: "toolUse" }),
+			fauxAssistantMessage([fauxText("VERDICT: FAIL\n1. answer.txt is missing (ls shows nothing).")]),
+			fauxAssistantMessage([fauxToolCall("write", { path: "answer.txt", content: "42\n" })], {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage([fauxText("Fixed: wrote answer.txt.")]),
+			fauxAssistantMessage([fauxText("VERDICT: PASS")]),
+		]);
+		const logsDir = await mkdtemp(join(tmpdir(), "tta-review-logs-"));
+		const result = await runTerminalAgent({
+			instruction: "Write 42 to answer.txt",
+			env,
+			runtime,
+			model,
+			harness: testHarness({
+				finishCheck: "",
+				review: {
+					prompt: "You are the reviewer.",
+					request: "TASK:\n{{instruction}}\nAGENT SUMMARY:\n{{summary}}",
+					followup: "REVIEW ISSUES:\n{{issues}}",
+					maxRounds: 3,
+					minTimeLeftSec: 0,
+				},
+			}),
+			timeBudgetSec: 600,
+			cwd: root,
+			logsDir,
+		});
+		expect(result.stopReason).toBe("completed");
+		expect(result.reviews.map((r) => r.pass)).toEqual([false, true]);
+		expect(result.reviews[0].issues).toContain("answer.txt is missing");
+		expect(await readFile(join(root, "answer.txt"), "utf8")).toBe("42\n");
+		const transcript = await readFile(join(logsDir, "transcript.md"), "utf8");
+		expect(transcript).toContain("REVIEW ISSUES:");
+		const review = await readFile(join(logsDir, "review-1.md"), "utf8");
+		expect(review).toContain("Write 42 to answer.txt");
+		expect(review).toContain("VERDICT: FAIL");
+	});
+
+	test("a review without a verdict ends the loop", async () => {
+		const { env, root } = await localEnvironment();
+		const { runtime, model } = await fauxRuntime([
+			fauxAssistantMessage([fauxText("Done.")]),
+			fauxAssistantMessage([fauxText("I could not decide.")]),
+		]);
+		const result = await runTerminalAgent({
+			instruction: "x",
+			env,
+			runtime,
+			model,
+			harness: testHarness({
+				finishCheck: "",
+				review: {
+					prompt: "R",
+					request: "{{instruction}}",
+					followup: "{{issues}}",
+					maxRounds: 2,
+					minTimeLeftSec: 0,
+				},
+			}),
+			timeBudgetSec: 600,
+			cwd: root,
+		});
+		expect(result.reviews).toHaveLength(1);
+		expect(result.reviews[0].pass).toBe(true);
+		expect(result.reviews[0].verdict).toBe("none");
+	});
+});
+
 describe("loadHarness", () => {
 	test("reads harness.json with prompt files and fills defaults", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "tta-harness-"));
