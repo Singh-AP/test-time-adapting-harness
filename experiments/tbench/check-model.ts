@@ -15,5 +15,7 @@ const reply = await models.completeSimple(
 	{ maxTokens: 2048, reasoning: reasoning as ThinkingLevel | undefined },
 );
 const text = reply.content.map((c) => (c.type === "text" ? c.text : "")).join("");
-console.log(`${modelId}: ${reply.stopReason} "${text.trim()}" in ${Date.now() - started} ms, cost $${reply.usage.cost.total.toFixed(5)}`);
+console.log(
+	`${modelId}: ${reply.stopReason} "${text.trim()}" in ${Date.now() - started} ms, cost $${reply.usage.cost.total.toFixed(5)}`,
+);
 if (reply.stopReason === "error") process.exit(1);
