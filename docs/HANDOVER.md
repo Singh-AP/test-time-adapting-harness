@@ -347,6 +347,26 @@ Versions:
 - Fetch results with `experiments/tbench/sync.sh <ip> <job>`, which writes `runs/tbench/<job>`.
 - Summarize with `python3 experiments/tbench/summarize.py runs/tbench/<job>`.
 
+**Offline mode (since 2026-10-14, user decision).** The account was notified that VPC Block Public
+Access (BPA) is enabled by a guardrail. It was still `off` in us-east-1 and us-east-2 at the time. The user chose to
+continue with **TB 4.0 offline**, and the guardrail must not be bypassed.
+
+- Container egress is dropped on the hosts with `sudo experiments/tbench/offline.sh on`, an iptables `DOCKER-USER`
+  rule on the external interface. Traffic between a task's containers, and from the host into containers, still
+  works.
+- The offline task set is the tasks whose reference solution passes without internet (`"offline"` in
+  `experiments/tbench/splits/tb4.json`). Offline runs use `TTA_OFFLINE=1 experiments/tbench/run.sh ...`.
+- Private connectivity (`python -m python.tbench.aws_infra --region R private-access`):
+  - interface endpoints with private DNS for `bedrock-runtime`, `ssm`, `ssmmessages` and `ec2messages`;
+  - an S3 gateway endpoint;
+  - the bucket `tta-tbench-<account>-<region>`;
+  - `AmazonSSMManagedInstanceCore` plus the `project-artifacts` S3 policy on the host role.
+- When SSH or GitHub are blocked, use `python -m python.tbench.remote run|deploy|results <label> ...` (SSM and
+  S3). `deploy` ships the local HEAD as a git bundle.
+- `run.sh` exports the host's region, so the GPU host in us-east-2 calls its own Bedrock endpoint.
+- Do not relaunch hosts: under BPA, Docker Hub images cannot be pulled again. All task images are cached on the two
+  existing hosts.
+
 **Terminal-Bench pitfalls so far.**
 
 1. The SSH security group must allow the operator's egress range (`<egress-cidr>`): several egress IPs are in use, so

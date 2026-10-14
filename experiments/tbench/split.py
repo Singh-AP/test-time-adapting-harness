@@ -6,8 +6,9 @@ assigned alternately.
 
 Usage:
   python experiments/tbench/split.py make <dataset-dir> > experiments/tbench/splits/tb4.json
-  python experiments/tbench/split.py select <split.json> <dev|heldout|all> [--gpu include|exclude|only]
-    prints Harbor task filters: -i <task> -i <task> ...
+  python experiments/tbench/split.py select <split.json> <dev|heldout|all> [--gpu include|exclude|only] [--offline]
+    prints Harbor task filters: -i <task> -i <task> ...; --offline keeps only tasks in the split's "offline" list
+    (tasks whose reference solution passes without internet access)
 """
 
 from __future__ import annotations
@@ -46,8 +47,11 @@ def make(dataset: pathlib.Path) -> dict[str, object]:
 	return {"dataset": "terminal-bench/terminal-bench@4.0.0", **split(tasks), "gpu": sorted(gpu)}
 
 
-def select(spec: dict[str, list[str]], subset: str, gpu: str = "include") -> list[str]:
+def select(spec: dict[str, list[str]], subset: str, gpu: str = "include", offline: bool = False) -> list[str]:
 	names = spec["dev"] + spec["heldout"] if subset == "all" else spec[subset]
+	if offline:
+		allowed = set(spec.get("offline", []))
+		names = [n for n in names if n in allowed]
 	gpu_tasks = set(spec.get("gpu", []))
 	if gpu == "exclude":
 		names = [n for n in names if n not in gpu_tasks]
@@ -61,7 +65,7 @@ if __name__ == "__main__":
 		print(json.dumps(make(pathlib.Path(sys.argv[2])), indent=2))
 	elif sys.argv[1] == "select":
 		gpu = sys.argv[sys.argv.index("--gpu") + 1] if "--gpu" in sys.argv else "include"
-		chosen = select(json.loads(pathlib.Path(sys.argv[2]).read_text()), sys.argv[3], gpu)
+		chosen = select(json.loads(pathlib.Path(sys.argv[2]).read_text()), sys.argv[3], gpu, "--offline" in sys.argv)
 		print(" ".join(f"-i {name}" for name in chosen))
 	else:
 		raise SystemExit(__doc__)
