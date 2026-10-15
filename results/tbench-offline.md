@@ -124,3 +124,22 @@ Notes:
 - v6 costs 2.2 times as much per task ($1,203 against $546 for the CPU set). Its runs are about twice as long
   (209 against 104 minutes on average), from the reviewer and from the prompts that push the agent to use its time
   budget.
+
+## Opus 5.5 with the v6 harness (offline, 1 trial per task)
+
+v6 was developed with Sonnet 5.5; these runs swap in Opus 5.5 at max effort without other changes.
+
+| Configuration | dev (22) | held-out (24) | all (46) | Cost $ | Mean minutes |
+|---|---|---|---|---|---|
+| v6 + Sonnet 5.5 | 0.727 | **0.667** | **0.696** | 1,203 | 209 |
+| v6 + Opus 5.5 | 0.682 | 0.500 | 0.587 | 1,120 | 147 |
+| v6 + Opus 5.5, Sonnet fallback after a blocked reply | 0.773 | 0.542 | 0.652 | 1,247 | |
+
+- The model provider's content filter blocked Opus replies on 6 tasks (security, cryptography and biology topics):
+  2 at the first message and 4 mid-run; retrying does not help. With `--ak fallback_model=<sonnet>`, the run
+  switches to Sonnet after a blocked reply; re-running those 6 tasks this way solved 3.
+- On the 8 hardest dev tasks (2 trials each), Opus and Sonnet get identical per-task results on the 7 tasks both
+  finished (0.714 each, about $210 each). The three tasks every version fails also fail with Opus.
+- Opus runs are shorter (147 against 209 minutes on average) and cost about the same. On held-out tasks, the fair
+  comparison because v6 was tuned with Sonnet on dev tasks, Sonnet scores higher; with one trial per task the gap
+  (about 3 tasks) is near run-to-run noise.
