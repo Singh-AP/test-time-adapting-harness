@@ -1,9 +1,14 @@
 {
 	"name": "test-time-adapting-harness",
 	"version": "0.1.0",
-	"description": "Test-time harness adaptation (Harness Learning, arXiv:2609.35738) built on the pi agent toolkit",
+	"description": "A self-improving coding-agent harness on pi: a Terminal-Bench agent whose harness learns from its own failures, plus Harness Learning (arXiv:2609.35738) for reasoning and QA tasks",
 	"type": "module",
 	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/Singh-AP/test-time-adapting-harness.git"
+	},
+	"homepage": "https://github.com/Singh-AP/test-time-adapting-harness#readme",
 	"engines": {
 		"node": ">=22.19.0"
 	},
@@ -14,7 +19,9 @@
 		"test": "vitest run",
 		"check": "biome check --write && tsc --noEmit",
 		"tta": "node src/cli.ts",
-		"test:py": ".venv-harbor/bin/python -m unittest discover -s python/tests -t ."
+		"test:py": ".venv-harbor/bin/python -m unittest discover -s python/tests -t .",
+		"tbench": "scripts/tbench.sh",
+		"check-model": "node scripts/check-model.ts"
 	},
 	"dependencies": {
 		"@earendil-works/pi-ai": "1.1.0",
@@ -30,7 +37,13 @@
 		"vitest": "5.0.3"
 	},
 	"keywords": [
-		"pi-package"
+		"pi-package",
+		"agent-harness",
+		"terminal-bench",
+		"harbor",
+		"coding-agent",
+		"harness-learning",
+		"test-time-adaptation"
 	],
 	"pi": {
 		"extensions": [

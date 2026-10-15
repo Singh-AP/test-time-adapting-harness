@@ -1,12 +1,13 @@
 """Harbor agent that runs the pi harness (src/tbench/main.ts) on the host.
 
-The pi agent and its Bedrock calls stay on the host; its tools run in the task container through Harbor's
-environment API, relayed over a JSON-lines bridge on the Node process's stdin and stdout.
+The pi agent and its model calls stay on the host; its tools run in the task container through Harbor's
+environment API, relayed over a JSON-lines bridge on the Node process's stdin and stdout. Model credentials
+(API keys, AWS credentials) never enter the container.
 
-Usage:
-  harbor run -d terminal-bench/terminal-bench@4.0.0 -e docker \\
-    --agent-import-path python.tbench.harbor_agent:PiHarnessAgent -m us.anthropic.claude-opus-5-5 \\
-    --ak harness=harnesses/tbench/v0 [--ak thinking=max] [--ak time_budget_sec=1800]
+Usage (scripts/tbench.sh wraps this):
+  PYTHONPATH=. harbor run -d terminal-bench/terminal-bench@4.0.0 -e docker \\
+    --agent-import-path python.tbench.harbor_agent:PiHarnessAgent -m anthropic/claude-sonnet-5-5 \\
+    --ak harness=harnesses/tbench/v6 [--ak thinking=max] [--ak time_budget_sec=1800] [--ak fallback_model=...]
 """
 
 from __future__ import annotations
@@ -40,8 +41,19 @@ _UPLOAD_CHUNK = 60_000  # base64 characters per exec, a multiple of 4; Linux lim
 _DOWNLOAD_LIMIT = 30 * 1024 * 1024
 
 
-def bedrock_model_id(model_name: str) -> str:
-	return model_name.split("/", 1)[1] if model_name.startswith("amazon-bedrock/") else model_name
+def model_spec(model_name: str | None) -> str:
+	"""Harbor's -m value: "provider/model-id" for any pi-ai provider, or a bare Amazon Bedrock model id."""
+	if not model_name:
+		raise ValueError("pass the agent's model with -m, for example -m anthropic/claude-sonnet-5-5")
+	return model_name
+
+
+def agent_env(base: dict[str, str], aws_profile: str | None) -> dict[str, str]:
+	"""Environment of the agent process: the caller's (API keys, AWS settings) plus optional AWS defaults."""
+	env = {**base, "AWS_REGION": base.get("AWS_REGION", "us-east-1")}
+	if aws_profile:
+		env.setdefault("AWS_PROFILE", aws_profile)
+	return env
 
 
 def task_timeout_sec(agent_logs_dir: pathlib.Path, cache_root: pathlib.Path = HARBOR_CACHE) -> float | None:
@@ -195,11 +207,9 @@ class PiHarnessOptions(AgentOptions):
 	node: str = Field(default="node", description="Node.js executable.")
 	self_test: bool = Field(default=False, description="Exercise the tool layer in the container, no model calls.")
 	fallback_model: str | None = Field(
-		default=None, description="Bedrock model to finish the run on when the provider blocks a reply."
+		default=None, description="Model (same form as -m) to finish the run on when the provider blocks a reply."
 	)
-	aws_profile: str = Field(
-		default="tta-instance", description="AWS profile for Bedrock when AWS_PROFILE is unset (runner hosts)."
-	)
+	aws_profile: str | None = Field(default=None, description="AWS profile for Amazon Bedrock when AWS_PROFILE is unset.")
 
 
 class PiHarnessAgent(BaseAgent):
@@ -224,7 +234,7 @@ class PiHarnessAgent(BaseAgent):
 		self.logs_dir.mkdir(parents=True, exist_ok=True)
 		config = {
 			"instruction": instruction,
-			"modelId": bedrock_model_id(self.model_name or "us.anthropic.claude-opus-5-5"),
+			"modelId": model_spec(self.model_name),
 			"harnessDir": str(harness),
 			"timeBudgetSec": budget,
 			"logsDir": str(self.logs_dir),
@@ -234,15 +244,14 @@ class PiHarnessAgent(BaseAgent):
 		if options.self_test:
 			config["selfTest"] = True
 		if options.fallback_model:
-			config["fallbackModelId"] = bedrock_model_id(options.fallback_model)
+			config["fallbackModelId"] = options.fallback_model
 		if self.skills_dir:
 			config["skillsDir"] = self.skills_dir
 		if self.mcp_servers:
 			config["mcpServers"] = [server.model_dump(mode="json") for server in self.mcp_servers]
 		config_path = self.logs_dir / "agent-config.json"
 		config_path.write_text(json.dumps(config, indent=2))
-		env = {**os.environ, "AWS_REGION": os.environ.get("AWS_REGION", "us-east-1")}
-		env.setdefault("AWS_PROFILE", options.aws_profile)
+		env = agent_env(dict(os.environ), options.aws_profile)
 		with open(self.logs_dir / "agent-stderr.log", "ab") as stderr:
 			process = await asyncio.create_subprocess_exec(
 				options.node,

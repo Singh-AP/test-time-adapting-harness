@@ -9,7 +9,7 @@ import { DEFAULT_BUDGETS } from "../src/core/capabilities.ts";
 import { evaluateHarness } from "../src/core/executor.ts";
 import { type AdaptSummary, adapt, QA_PROTOCOL } from "../src/core/loop.ts";
 import type { Task } from "../src/core/types.ts";
-import { createBedrockModels, PiProposerClient, PiSolverClient, requireModel } from "../src/llm/pi-clients.ts";
+import { createModelCatalog, PiProposerClient, PiSolverClient, requireModel } from "../src/llm/pi-clients.ts";
 import { createQaTask, type QaDataset } from "../src/tasks/qa/task.ts";
 import { Semaphore } from "../src/util/concurrency.ts";
 import { fmt } from "../src/util/text.ts";
@@ -33,7 +33,7 @@ const { values } = parseArgs({
 process.env.AWS_REGION ??= "us-east-1";
 const datasets = (values.datasets ?? "hotpotqa").split(",") as QaDataset[];
 const tag = values.tag ?? new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-const models = createBedrockModels();
+const models = createModelCatalog();
 const solverId = values.solver ?? DEFAULT_SOLVER_MODEL;
 const proposerId = values.proposer ?? DEFAULT_PROPOSER_MODEL;
 const solver = new PiSolverClient({

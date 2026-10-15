@@ -69,8 +69,12 @@ export function createAdaptExtension(service: AdaptService = createAdaptService(
 				rounds: Type.Optional(Type.Integer({ minimum: 1, description: "Revision rounds" })),
 				proposals: Type.Optional(Type.Integer({ minimum: 1, description: "Proposals per round" })),
 				protocol: Type.Optional(Type.Union([Type.Literal("rg"), Type.Literal("qa")])),
-				solver: Type.Optional(Type.String({ description: "Bedrock solver model id" })),
-				proposer: Type.Optional(Type.String({ description: "Bedrock proposer model id" })),
+				solver: Type.Optional(
+					Type.String({ description: "Solver model: provider/model, or a bare Amazon Bedrock id" }),
+				),
+				proposer: Type.Optional(
+					Type.String({ description: "Proposer model: provider/model, or a bare Amazon Bedrock id" }),
+				),
 				dev: Type.Optional(Type.Integer({ minimum: 1 })),
 				heldout: Type.Optional(Type.Integer({ minimum: 0 })),
 			}),

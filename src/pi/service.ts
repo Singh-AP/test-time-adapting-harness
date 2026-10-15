@@ -8,7 +8,7 @@ import {
 } from "../config.ts";
 import { DEFAULT_BUDGETS } from "../core/capabilities.ts";
 import { type AdaptSummary, adapt, QA_PROTOCOL, REASONING_GYM_PROTOCOL } from "../core/loop.ts";
-import { createBedrockModels, PiProposerClient, PiSolverClient, requireModel } from "../llm/pi-clients.ts";
+import { createModelCatalog, PiProposerClient, PiSolverClient, requireModel } from "../llm/pi-clients.ts";
 import { createTask } from "../tasks/registry.ts";
 import { createPythonRunner } from "../tools/python.ts";
 import { Semaphore } from "../util/concurrency.ts";
@@ -31,14 +31,14 @@ export interface AdaptService {
 	run(request: AdaptRequest, log: (line: string) => void, signal?: AbortSignal): Promise<AdaptSummary>;
 }
 
-/** Runs the adaptation loop on Bedrock models; nothing is created until run() is called. */
+/** Runs the adaptation loop on pi-ai models (any provider); nothing is created until run() is called. */
 export function createAdaptService(): AdaptService {
 	return {
 		async run(request, log, signal) {
 			process.env.AWS_REGION ??= "us-east-1";
 			const task = await createTask(request.task, { devSize: request.dev, heldoutSize: request.heldout });
 			try {
-				const models = createBedrockModels();
+				const models = createModelCatalog();
 				const solver = new PiSolverClient({
 					models,
 					model: requireModel(models, request.solver ?? process.env.TTA_SOLVER_MODEL ?? DEFAULT_SOLVER_MODEL),

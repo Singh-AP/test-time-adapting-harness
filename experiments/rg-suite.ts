@@ -6,8 +6,8 @@ import { parseArgs } from "node:util";
 import { DEFAULT_PROPOSER_MODEL, DEFAULT_SOLVER_MODEL, defaultPythonPath, repoPath } from "../src/config.ts";
 import { DEFAULT_BUDGETS } from "../src/core/capabilities.ts";
 import { type AdaptSummary, adapt, REASONING_GYM_PROTOCOL } from "../src/core/loop.ts";
-import { createBedrockModels, PiProposerClient, PiSolverClient, requireModel } from "../src/llm/pi-clients.ts";
-import { createBedrockAgenticProposer } from "../src/proposers/agentic.ts";
+import { createModelCatalog, PiProposerClient, PiSolverClient, requireModel } from "../src/llm/pi-clients.ts";
+import { createAgenticProposerForModel } from "../src/proposers/agentic.ts";
 import { ReasoningGymBridge } from "../src/tasks/reasoning-gym/bridge.ts";
 import { createReasoningGymTask } from "../src/tasks/reasoning-gym/task.ts";
 import { createPythonRunner } from "../src/tools/python.ts";
@@ -36,7 +36,7 @@ process.env.AWS_REGION ??= "us-east-1";
 const families = (values.families ?? "maze").split(",");
 const rounds = Number(values.rounds ?? REASONING_GYM_PROTOCOL.rounds);
 const tag = values.tag ?? new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-const models = createBedrockModels();
+const models = createModelCatalog();
 const solverId = values.solver ?? DEFAULT_SOLVER_MODEL;
 const proposerId = values.proposer ?? DEFAULT_PROPOSER_MODEL;
 const solver = new PiSolverClient({
@@ -52,9 +52,9 @@ const proposer = new PiProposerClient({
 });
 const propose =
 	values["proposer-mode"] === "agentic"
-		? await createBedrockAgenticProposer({
+		? await createAgenticProposerForModel({
 				agentDir: repoPath("runs", `${tag}-pi-agent`),
-				modelId: proposerId,
+				model: proposerId,
 				thinkingLevel: (values.reasoning ?? "medium") as "medium",
 				maxFeedbackRuns: Number(values["feedback-runs"] ?? 3),
 				timeoutMs: Number(values["agent-timeout"] ?? 1200) * 1000,

@@ -16,8 +16,8 @@ import { independentRevisions } from "./core/independent.ts";
 import { type AdaptConfig, adapt, QA_PROTOCOL, REASONING_GYM_PROTOCOL, renderUsage } from "./core/loop.ts";
 import { exportLearningData } from "./learning/export.ts";
 import { collectEpisodes, distillPlaybook } from "./learning/playbook.ts";
-import { createBedrockModels, PiProposerClient, PiSolverClient, requireModel } from "./llm/pi-clients.ts";
-import { createBedrockAgenticProposer } from "./proposers/agentic.ts";
+import { createModelCatalog, PiProposerClient, PiSolverClient, requireModel } from "./llm/pi-clients.ts";
+import { createAgenticProposerForModel } from "./proposers/agentic.ts";
 import { ReasoningGymBridge } from "./tasks/reasoning-gym/bridge.ts";
 import { createTask } from "./tasks/registry.ts";
 import { createPythonRunner } from "./tools/python.ts";
@@ -34,14 +34,16 @@ Usage:
   tta export --out <dir> <run-dir>...      Export GRPO rollout groups and an SFT corpus from runs
   tta playbook --out <file> <run-dir>...   Distill a task-agnostic revision playbook from runs
 
-Task specs: toy:addition, rg:<family>
+Task specs: toy:addition, rg:<family>, qa:hotpotqa|musique|2wiki
+Models: provider/model-id for any pi-ai provider (anthropic/claude-sonnet-5-5, openai/gpt-5.5, ...); a bare id
+is an Amazon Bedrock model (us.anthropic.claude-opus-5-5).
 
 Options:
   --seed-harness <file>      Seed harness (default seeds/rg-seed.js)
   --harness <file>           Harness to score (eval)
   --set dev|heldout|both     Question sets to score (eval, default both)
-  --solver <id>              Bedrock solver model (default $TTA_SOLVER_MODEL or ${DEFAULT_SOLVER_MODEL})
-  --proposer <id>            Bedrock proposer model (default $TTA_PROPOSER_MODEL or ${DEFAULT_PROPOSER_MODEL})
+  --solver <model>           Solver model (default $TTA_SOLVER_MODEL or ${DEFAULT_SOLVER_MODEL})
+  --proposer <model>         Proposer model (default $TTA_PROPOSER_MODEL or ${DEFAULT_PROPOSER_MODEL})
   --reasoning <level>        Proposer thinking: off|minimal|low|medium|high (default medium)
   --protocol rg|qa           Selection protocol preset (default rg)
   --rounds <n>               Revision rounds T
@@ -160,7 +162,7 @@ async function main(): Promise<void> {
 	if (command === "playbook") {
 		const out = values.out ?? repoPath("results", "playbook.md");
 		const episodes = await collectEpisodes(positionals.slice(1));
-		const models = createBedrockModels();
+		const models = createModelCatalog();
 		const client = new PiProposerClient({
 			models,
 			model: requireModel(models, values.proposer ?? process.env.TTA_PROPOSER_MODEL ?? DEFAULT_PROPOSER_MODEL),
@@ -181,7 +183,7 @@ async function main(): Promise<void> {
 		heldoutSize: optionalInteger(values.heldout),
 	});
 	try {
-		const models = createBedrockModels();
+		const models = createModelCatalog();
 		const solverModel = requireModel(models, values.solver ?? process.env.TTA_SOLVER_MODEL ?? DEFAULT_SOLVER_MODEL);
 		const solver = new PiSolverClient({
 			models,
@@ -229,10 +231,8 @@ async function main(): Promise<void> {
 			return;
 		}
 
-		const proposerModel = requireModel(
-			models,
-			values.proposer ?? process.env.TTA_PROPOSER_MODEL ?? DEFAULT_PROPOSER_MODEL,
-		);
+		const proposerSpec = values.proposer ?? process.env.TTA_PROPOSER_MODEL ?? DEFAULT_PROPOSER_MODEL;
+		const proposerModel = requireModel(models, proposerSpec);
 		const proposer = new PiProposerClient({
 			models,
 			model: proposerModel,
@@ -252,9 +252,9 @@ async function main(): Promise<void> {
 				? {
 						solver,
 						python,
-						propose: await createBedrockAgenticProposer({
+						propose: await createAgenticProposerForModel({
 							agentDir: join(runDir, ".pi-agent"),
-							modelId: proposerModel.id,
+							model: proposerSpec,
 							thinkingLevel: reasoningLevel(values.reasoning) ?? "off",
 							maxFeedbackRuns: integer(values["feedback-runs"], 3),
 							timeoutMs: integer(values["agent-timeout"], 1200) * 1000,

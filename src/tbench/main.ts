@@ -7,6 +7,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { resolveModel } from "../llm/model-spec.ts";
 import { errorMessage } from "../util/text.ts";
 import { connectMcpServers, type McpServer, runTerminalAgent } from "./agent.ts";
 import { HarborBridge } from "./bridge.ts";
@@ -16,6 +17,7 @@ import { runSelfTest } from "./selftest.ts";
 
 interface AgentConfig {
 	instruction: string;
+	/** "provider/model-id", or a bare Amazon Bedrock model id. */
 	modelId: string;
 	harnessDir: string;
 	timeBudgetSec: number;
@@ -25,7 +27,7 @@ interface AgentConfig {
 	selfTest?: boolean;
 	skillsDir?: string;
 	mcpServers?: McpServer[];
-	/** Bedrock model to switch to when the provider blocks a reply. */
+	/** Model to switch to when the provider blocks a reply (same form as modelId). */
 	fallbackModelId?: string;
 }
 
@@ -60,12 +62,8 @@ async function main(): Promise<void> {
 		modelsPath: join(config.logsDir, ".pi", "models.json"),
 		refreshOnCreate: false,
 	});
-	const model = runtime.getModel("amazon-bedrock", config.modelId);
-	if (!model) throw new Error(`Unknown amazon-bedrock model "${config.modelId}"`);
-	const fallbackModel = config.fallbackModelId
-		? runtime.getModel("amazon-bedrock", config.fallbackModelId)
-		: undefined;
-	if (config.fallbackModelId && !fallbackModel) throw new Error(`Unknown fallback model "${config.fallbackModelId}"`);
+	const model = resolveModel(runtime, config.modelId);
+	const fallbackModel = config.fallbackModelId ? resolveModel(runtime, config.fallbackModelId) : undefined;
 	const harness = await loadHarness(config.harnessDir);
 	if (config.thinkingLevel) harness.thinkingLevel = config.thinkingLevel;
 	const result = await runTerminalAgent({

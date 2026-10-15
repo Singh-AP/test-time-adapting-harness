@@ -6,7 +6,7 @@ import { parseArgs } from "node:util";
 import { defaultPythonPath, repoPath } from "../src/config.ts";
 import { DEFAULT_BUDGETS } from "../src/core/capabilities.ts";
 import { evaluateHarness } from "../src/core/executor.ts";
-import { createBedrockModels, PiSolverClient, requireModel } from "../src/llm/pi-clients.ts";
+import { createModelCatalog, PiSolverClient, requireModel } from "../src/llm/pi-clients.ts";
 import { ReasoningGymBridge } from "../src/tasks/reasoning-gym/bridge.ts";
 import { createReasoningGymTask } from "../src/tasks/reasoning-gym/task.ts";
 import { createPythonRunner } from "../src/tools/python.ts";
@@ -29,7 +29,7 @@ const seeds = {
 	seed: await readFile(repoPath("seeds", "rg-seed.js"), "utf8"),
 	"tool-loop": await readFile(repoPath("seeds", "tool-loop.js"), "utf8"),
 };
-const models = createBedrockModels();
+const models = createModelCatalog();
 const bridge = new ReasoningGymBridge({ pythonPath: defaultPythonPath() });
 const python = createPythonRunner({ pythonPath: defaultPythonPath() });
 const limiter = new Semaphore(16);

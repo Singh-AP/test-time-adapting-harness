@@ -6,7 +6,12 @@ import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { describe, expect, test } from "vitest";
 import { DEFAULT_BUDGETS } from "../src/core/capabilities.ts";
 import { screenHarness } from "../src/core/screens.ts";
-import { agenticSystemPrompt, createAgenticProposer, guardPath } from "../src/proposers/agentic.ts";
+import {
+	agenticSystemPrompt,
+	createAgenticProposer,
+	createAgenticProposerForModel,
+	guardPath,
+} from "../src/proposers/agentic.ts";
 import { createArithmeticTask } from "../src/tasks/toy.ts";
 import { stubPython, stubSolver, sumInPrompt } from "./helpers.ts";
 
@@ -106,5 +111,20 @@ describe("agentic proposer", () => {
 		const proposal = await createAgenticProposer({ runtime, model, thinkingLevel: "off", timeoutMs: 200 })(options());
 		expect(proposal.status).toBe("no_change");
 		expect(proposal.errors.join(" ")).toContain("timed out");
+	});
+});
+
+describe("createAgenticProposerForModel", () => {
+	test("takes provider/model specs of any built-in provider and rejects unknown models", async () => {
+		const agentDir = await mkdtemp(join(tmpdir(), "tta-agent-dir-"));
+		expect(typeof (await createAgenticProposerForModel({ agentDir, model: "anthropic/claude-sonnet-5-5" }))).toBe(
+			"function",
+		);
+		expect(typeof (await createAgenticProposerForModel({ agentDir, model: "us.anthropic.claude-opus-5-5" }))).toBe(
+			"function",
+		);
+		await expect(createAgenticProposerForModel({ agentDir, model: "anthropic/no-such-model" })).rejects.toThrow(
+			/Unknown anthropic model "no-such-model"/,
+		);
 	});
 });

@@ -44,12 +44,20 @@ def hand_logs_to_host_before_reading(verifier_class: Any) -> None:
 		if prepare is None or not getattr(getattr(env, "capabilities", None), "mounted", False):
 			return await original(self, *args, **kwargs)
 		original_exec = env.exec
+		handing_back = False
 
 		async def exec_then_hand_back(*exec_args: Any, **exec_kwargs: Any) -> Any:
+			nonlocal handing_back
+			if handing_back:  # prepare_logs_for_host chowns through exec itself
+				return await original_exec(*exec_args, **exec_kwargs)
 			try:
 				return await original_exec(*exec_args, **exec_kwargs)
 			finally:
-				await prepare()
+				handing_back = True
+				try:
+					await prepare()
+				finally:
+					handing_back = False
 
 		env.exec = exec_then_hand_back
 		try:

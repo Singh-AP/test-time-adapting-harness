@@ -133,10 +133,22 @@ class TimeoutTests(unittest.TestCase):
 			self.assertIsNone(harbor_agent.task_timeout_sec(pathlib.Path(tmp) / "agent"))
 
 
-class ModelIdTests(unittest.TestCase):
-	def test_strips_provider_prefix(self):
-		self.assertEqual(harbor_agent.bedrock_model_id("amazon-bedrock/us.anthropic.claude-opus-5-5"), "us.anthropic.claude-opus-5-5")
-		self.assertEqual(harbor_agent.bedrock_model_id("us.anthropic.claude-opus-5-5"), "us.anthropic.claude-opus-5-5")
+class ModelAndEnvironmentTests(unittest.TestCase):
+	def test_model_specs_pass_through_to_the_agent(self):
+		for spec in ["anthropic/claude-sonnet-5-5", "amazon-bedrock/us.anthropic.claude-opus-5-5", "us.anthropic.claude-opus-5-5"]:
+			self.assertEqual(harbor_agent.model_spec(spec), spec)
+
+	def test_a_missing_model_is_an_error_that_shows_the_expected_form(self):
+		with self.assertRaisesRegex(ValueError, "-m anthropic/claude-sonnet-5-5"):
+			harbor_agent.model_spec(None)
+
+	def test_aws_profile_is_set_only_when_asked_and_never_overrides_the_callers(self):
+		self.assertNotIn("AWS_PROFILE", harbor_agent.agent_env({"PATH": "/bin"}, None))
+		self.assertEqual(harbor_agent.agent_env({}, "runner")["AWS_PROFILE"], "runner")
+		self.assertEqual(harbor_agent.agent_env({"AWS_PROFILE": "mine"}, "runner")["AWS_PROFILE"], "mine")
+		self.assertEqual(harbor_agent.agent_env({"ANTHROPIC_API_KEY": "k"}, None)["ANTHROPIC_API_KEY"], "k")
+		self.assertEqual(harbor_agent.agent_env({}, None)["AWS_REGION"], "us-east-1")
+		self.assertEqual(harbor_agent.agent_env({"AWS_REGION": "eu-west-1"}, None)["AWS_REGION"], "eu-west-1")
 
 
 if __name__ == "__main__":

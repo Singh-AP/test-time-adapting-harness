@@ -26,6 +26,8 @@ if [ -z "${AWS_REGION:-}" ]; then
 	AWS_REGION=$(curl -s -m 2 -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/placement/region || true)
 	export AWS_REGION=${AWS_REGION:-us-east-1}
 fi
+# Bedrock credentials come from the instance role, through the profile that bootstrap.sh writes.
+export AWS_PROFILE=${AWS_PROFILE:-tta-instance}
 git rev-parse --short HEAD > "$HOME/jobs/$job.commit" 2>/dev/null || true
 PYTHONPATH="$PWD" exec .venv-harbor/bin/harbor run -d terminal-bench/terminal-bench@4.0.0 -e docker \
 	-a python.tbench.harbor_agent:PiHarnessAgent -m "$model" --ak harness="$harness" \

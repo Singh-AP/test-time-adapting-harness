@@ -59,3 +59,33 @@ class VerifierPermissionTests(unittest.TestCase):
 		self.assertEqual(asyncio.run(FakeVerifier(env).verify()), "result")
 		self.assertEqual(events, ["exec run tests", "chown", "read reward"])
 		self.assertNotIn("exec", vars(env))
+
+	def test_handing_logs_back_through_exec_does_not_recurse(self):
+		"""Harbor's prepare_logs_for_host chowns through service_exec, which calls the (patched) exec again."""
+		import asyncio
+		from types import SimpleNamespace
+
+		events = []
+
+		class FakeEnv:
+			capabilities = SimpleNamespace(mounted=True)
+
+			async def exec(self, command, **kwargs):
+				events.append(f"exec {command}")
+				return SimpleNamespace(return_code=0)
+
+			async def prepare_logs_for_host(self):
+				await self.exec(command="chown")
+
+		class FakeVerifier:
+			def __init__(self, env):
+				self.environment = env
+
+			async def verify(self):
+				await self.environment.exec(command="run tests")
+				events.append("read reward")
+				return "result"
+
+		harbor_patches.hand_logs_to_host_before_reading(FakeVerifier)
+		self.assertEqual(asyncio.run(FakeVerifier(FakeEnv()).verify()), "result")
+		self.assertEqual(events, ["exec run tests", "exec chown", "read reward"])

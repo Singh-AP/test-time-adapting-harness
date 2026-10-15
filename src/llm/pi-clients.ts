@@ -1,14 +1,5 @@
-import {
-	type Api,
-	type AssistantMessage,
-	type Context,
-	createModels,
-	type Message,
-	type Model,
-	type Models,
-	type ThinkingLevel,
-} from "@earendil-works/pi-ai";
-import { amazonBedrockProvider } from "@earendil-works/pi-ai/providers/amazon-bedrock";
+import type { Api, AssistantMessage, Context, Message, Model, Models, ThinkingLevel } from "@earendil-works/pi-ai";
+import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { loadSharedConfigFiles } from "@smithy/core/config";
 import type {
 	ProposerClient,
@@ -21,22 +12,19 @@ import type {
 	Usage,
 } from "../core/types.ts";
 import { type Semaphore, sleep } from "../util/concurrency.ts";
+import { resolveModel } from "./model-spec.ts";
 
-/** A pi-ai model collection with the Amazon Bedrock provider (ambient AWS credentials). */
-export function createBedrockModels(): Models {
-	const models = createModels();
-	models.setProvider(amazonBedrockProvider());
-	return models;
+/**
+ * A pi-ai model collection with every built-in provider. Credentials come from each provider's usual source:
+ * API-key variables such as ANTHROPIC_API_KEY or OPENAI_API_KEY, and the AWS credential chain for Amazon Bedrock.
+ */
+export function createModelCatalog(): Models {
+	return builtinModels();
 }
 
-export function requireModel(models: Models, id: string, provider = "amazon-bedrock"): Model<Api> {
-	const model = models.getModel(provider, id);
-	if (!model) {
-		throw new Error(
-			`Unknown ${provider} model "${id}". Use an id from pi-ai's catalog, for example us.anthropic.claude-opus-5-5.`,
-		);
-	}
-	return model;
+/** Resolves "provider/model-id", or a bare Amazon Bedrock model id (see model-spec.ts). */
+export function requireModel(models: Models, spec: string): Model<Api> {
+	return resolveModel(models, spec);
 }
 
 export interface RetryPolicy {

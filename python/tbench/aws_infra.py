@@ -1,8 +1,8 @@
-"""Provision Terminal-Bench runner hosts in the test account.
+"""Provision Terminal-Bench runner hosts in your AWS account (optional: scripts/tbench.sh runs anywhere with Docker).
 
 Each host runs Harbor, the task containers (Docker) and the pi harness. Its instance role may only invoke
 Bedrock models, IMDSv2 with a hop limit of 1 keeps that role away from task containers, and SSH is open only
-to the caller's IP. Every instance is tagged Project=tta-tbench; stop, start and terminate refuse anything else.
+to the caller's IP (or a range of /16 or narrower). Every instance is tagged Project=tta-tbench; stop, start and terminate refuse anything else.
 
 Usage (prefix with AWS_PROFILE=<profile>):
   python -m python.tbench.aws_infra setup
@@ -13,6 +13,7 @@ Usage (prefix with AWS_PROFILE=<profile>):
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import pathlib
 import re
@@ -110,6 +111,17 @@ def _tag(instance: dict[str, Any], key: str) -> str:
 	return next((tag["Value"] for tag in instance.get("Tags", []) if tag["Key"] == key), "")
 
 
+def check_ssh_cidr(cidr: str) -> str:
+	"""SSH is opened only to specific ranges (a /16 or narrower), never to the whole internet."""
+	try:
+		network = ipaddress.ip_network(cidr, strict=False)
+	except ValueError as error:
+		raise ValueError(f"not a CIDR: {cidr}") from error
+	if network.prefixlen < 16:
+		raise ValueError(f"refusing to open SSH to {cidr}: use your own address or a range of /16 or narrower")
+	return cidr
+
+
 class Infra:
 	def __init__(self, region: str) -> None:
 		import boto3
@@ -202,6 +214,7 @@ class Infra:
 		if cidr is None:
 			ip = urllib.request.urlopen("https://checkip.amazonaws.com", timeout=10).read().decode().strip()
 			cidr = f"{ip}/32"
+		cidr = check_ssh_cidr(cidr)
 		rules = self.ec2.describe_security_groups(GroupIds=[group])["SecurityGroups"][0]["IpPermissions"]
 		if any(r.get("FromPort") == 22 and any(x["CidrIp"] == cidr for x in r.get("IpRanges", [])) for r in rules):
 			print(f"{cidr} already allowed")

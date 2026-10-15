@@ -45,6 +45,17 @@ class SafetyTests(unittest.TestCase):
 
 
 
+class SshCidrTests(unittest.TestCase):
+	def test_specific_ranges_are_accepted(self):
+		for cidr in ["203.0.113.7/32", "198.51.100.0/24", "10.20.0.0/16"]:
+			self.assertEqual(aws_infra.check_ssh_cidr(cidr), cidr)
+
+	def test_world_open_and_very_wide_ranges_are_refused(self):
+		for cidr in ["0.0.0.0/0", "10.0.0.0/8", "::/0", "not-a-cidr"]:
+			with self.assertRaises(ValueError):
+				aws_infra.check_ssh_cidr(cidr)
+
+
 class PrivateAccessTests(unittest.TestCase):
 	def test_bucket_name_is_per_account_and_region(self):
 		self.assertEqual(aws_infra.bucket_name("123456789012", "us-east-2"), "tta-tbench-123456789012-us-east-2")

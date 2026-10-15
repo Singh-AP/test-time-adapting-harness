@@ -3,7 +3,7 @@
  *
  *   node src/tbench/cli.ts report  --jobs runs/tbench/<job> [--jobs ...] [--subset dev]
  *   node src/tbench/cli.ts propose --parent harnesses/tbench/v1 --jobs runs/tbench/<job> --out harnesses/tbench/v2
- *                                  [--proposer us.anthropic.claude-opus-5-5] [--thinking high] [--history file.md]
+ *                                  [--proposer <provider/model>] [--thinking high] [--history file.md]
  *
  * Reports and proposals only ever include dev-split tasks (experiments/tbench/splits/tb4.json).
  */
@@ -13,6 +13,7 @@ import { parseArgs } from "node:util";
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { repoPath } from "../config.ts";
+import { resolveModel } from "../llm/model-spec.ts";
 import { proposeHarness } from "./propose.ts";
 import { buildTbenchReport, loadTrials, type TrialSummary } from "./report.ts";
 
@@ -65,8 +66,7 @@ async function main(): Promise<void> {
 			modelsPath: join(repoPath("runs"), ".pi-proposer", "models.json"),
 			refreshOnCreate: false,
 		});
-		const model = runtime.getModel("amazon-bedrock", values.proposer as string);
-		if (!model) throw new Error(`unknown amazon-bedrock model ${values.proposer}`);
+		const model = resolveModel(runtime, values.proposer as string);
 		const result = await proposeHarness({
 			runtime,
 			model,

@@ -21,6 +21,7 @@ import { harnessApiDoc } from "../core/prompts.ts";
 import type { Proposal, ProposeFn, ProposeOptions } from "../core/proposer.ts";
 import { buildReport } from "../core/report.ts";
 import type { SolverMessage } from "../core/types.ts";
+import { resolveModel } from "../llm/model-spec.ts";
 import { clip, errorMessage, fmt } from "../util/text.ts";
 
 export interface AgenticProposerOptions {
@@ -306,10 +307,10 @@ async function proposeInWorkspace(
 	return { ...base, status: "edit", applied: true, source: finalSource };
 }
 
-/** Agentic proposer on a Bedrock model, with a pi model runtime stored under `agentDir`. */
-export async function createBedrockAgenticProposer(o: {
+/** Agentic proposer on a "provider/model" spec (bare ids are Bedrock), with a pi model runtime under `agentDir`. */
+export async function createAgenticProposerForModel(o: {
 	agentDir: string;
-	modelId: string;
+	model: string;
 	thinkingLevel?: ThinkingLevel | "off";
 	maxFeedbackRuns?: number;
 	timeoutMs?: number;
@@ -319,8 +320,7 @@ export async function createBedrockAgenticProposer(o: {
 		modelsPath: join(o.agentDir, "models.json"),
 		refreshOnCreate: false,
 	});
-	const model = runtime.getModel("amazon-bedrock", o.modelId);
-	if (!model) throw new Error(`Unknown amazon-bedrock model "${o.modelId}"`);
+	const model = resolveModel(runtime, o.model);
 	return createAgenticProposer({
 		runtime,
 		model,
