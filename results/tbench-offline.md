@@ -72,3 +72,41 @@
 | vf2-speedup-networkx | dev | 1.00 | 1 | 0 | 26.99 | 243 | 206 | completed |  |
 | wal-recovery-ordering | heldout | 0.00 | 1 | 0 | 9.38 | 88 | 91 | completed |  |
 | wdm-design | heldout | 1.00 | 1 | 0 | 18.44 | 251 | 160 | completed |  |
+
+## Harness improvement on the dev split (Sonnet 5.5, offline)
+
+Versions (`harnesses/tbench/`, change notes in each `CHANGES.md`):
+
+- **v0:** a prompt, an environment probe and one finish check.
+- **v1:** an independent reviewer plus a persistence prompt. Stopped: a truncation bug hid its effect.
+- **v2:** v0 plus the engineering fixes: replies cut off by the output limit are continued, compaction near 400k
+  context, and a cgroup-aware probe.
+- **v3:** a proposer (Opus 5.5) edit of v2 from v0's dev report: guidance on how hidden tests are usually failed.
+- **v4:** v3 plus a reviewer with a targeted failure-pattern checklist.
+- **v5:** a proposer edit of v3: tie-breakers for judgment calls.
+- **v6:** v5 plus the v4 reviewer.
+- **v7:** v6 plus an independent test designer that predicts the hidden tests (in progress).
+
+Per-task mean reward on the non-trivial dev tasks (failed by at least one version). v3 to v6 have 2 or 3 trials per
+task; the rest have 1:
+
+| Task | v0 | v2 | v2r | v3 | v4 | v5 | v6 |
+|---|---|---|---|---|---|---|---|
+| bun-sourcemap-leak | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| cargo-flight-dispatch | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| freecad-platform-drawing | 1.00 | 0.00 | 0.00 | 1.00 | 0.50 | 0.00 | 1.00 |
+| freight-dispatch-shift | 0.00 | 0.00 | - | 0.00 | 0.00 | - | - |
+| intrastat-meldung | 1.00 | 1.00 | 0.00 | 0.67 | 1.00 | 1.00 | 1.00 |
+| mvcc-lsm-compaction | 1.00 | 0.00 | 1.00 | 0.67 | 1.00 | 1.00 | 1.00 |
+| pretrain-shard-corruption | 0.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | - |
+| roy-polymorph-cn | 0.00 | 0.00 | 1.00 | 0.33 | 1.00 | 1.00 | 1.00 |
+Tasks finished in every run: 6
+
+Notes:
+
+- Most dev tasks are solved by every version. One-trial differences of one or two tasks are run-to-run noise, so
+  candidates were compared with 2 trials on these tasks.
+- Three tasks fail in every version: `bun-sourcemap-leak`, `cargo-flight-dispatch` and `freight-dispatch-shift`.
+  Their transcripts show the model rationalizing against the guidance. They look capability-limited for Sonnet.
+- The reviewer is worth its cost (about 40 to 50% more per trial) only with the targeted checklist (v4, v6). The
+  generic reviewer (v2r) returned PASS on 16 of 18 trials, including failed ones.
