@@ -454,10 +454,16 @@ continue with **TB 4.0 offline**, and the guardrail must not be bypassed.
   | v6 + Opus 5.5 with Sonnet fallback on blocked replies | 0.652 (the 6 filtered tasks re-run as `v6-opus-fb-1`, 3 of 6 solved) |
 
   None of these is leaderboard-comparable (online, 66 tasks, 5 trials: 64.85% is the SOTA).
-- **Was running at writing:**
-  - `v6-opus-hard`: Opus with v6 on the 8 hard dev tasks, 2 trials each, the baseline for Opus-specific tuning.
-  - GPU host: `v6-full-gpu` (Sonnet), then `v6-opus-1-gpu`, through `~/gpu-queue-3.sh` and `~/gpu-queue-4.sh`.
-  - The user was asked whether to stop these.
+- **`v6-opus-hard` (done):** Opus with v6 on the 8 hard dev tasks, 2 trials each: 0.625, $331. On the 7 tasks
+  that Sonnet's `v6-hard` also finished, both models score 0.714 with identical per-task results at about the same
+  cost; Opus also fails `freight-dispatch-shift` (0 of 2, $122). The three always-failing tasks fail with Opus too.
+- **GPU host (2026-10-15 14:40 UTC):** `v6-full-gpu` (Sonnet) solved `math-eval-grader` (1.0, $72, 409 min) and is
+  running `fp8-rmsnorm-gemm`, with `jax-speedrun-gpu` next. `~/gpu-queue-4.sh` then starts `v6-opus-1-gpu`
+  automatically. The CPU host is idle.
+- **Known minor bug:** the verifier-log patch (`hand_logs_to_host_before_reading`) recurses: Harbor's
+  `prepare_logs_for_host` chowns through `service_exec`, which calls the patched `exec` again. The chown still runs
+  before the recursion limit, so rewards are read (every job has them), but each verifier call logs "Failed to chown
+  logs directory: maximum recursion depth exceeded" and repeats the chown many times. Fix with a re-entrancy guard.
 - **Open user decisions:** an online run (BPA is still `off`; about $1.7k for 1 trial per task, about $8k for 5),
   Opus-specific tuning (about $300 to 400 per round), or stop. Also a budget cap. Total Bedrock spend so far is
   about $7k. The /goal was cleared by the user.
