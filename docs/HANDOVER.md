@@ -424,6 +424,21 @@ continue with **TB 4.0 offline**, and the guardrail must not be bypassed.
 18. The Mac's egress IP can change (it moved to <client-ip>). If SSH times out, check with
     `curl checkip.amazonaws.com` and `aws_infra allow-ip` before suspecting BPA.
 
+19. **Queue scripts.**
+    - Editing a running bash script with `sed -i` does not stop it, because bash keeps reading the original file.
+    - A `while pgrep -f "<pattern>"` guard whose own command line contains the pattern matches itself and never
+      exits.
+    - Wait on a process ID, or on a pattern the waiting command does not contain.
+20. **Opus 5.5's content filter on Bedrock.** Replies stop with `content_filtered` on some security, cryptography
+    and biology tasks:
+    - `formal-crypto` and `uefi-bootkit` are blocked at the first message;
+    - `atrx-vep-crispr`, `html-js-filter`, `kv-live-surgery` and `shadow-relay` are blocked mid-run;
+    - retries do not help once the filter triggers.
+
+    Sonnet 5.5 is rarely affected. Use `--ak fallback_model=global.anthropic.claude-sonnet-5-5` (the run switches
+    models after a blocked reply) and `experiments/tbench/filtered.py <job>` to find runs that ended on a blocked
+    reply. Report both the Opus-only score and the score with fallback.
+
 **Status at writing (2026-10-15 03:50).**
 
 - **Harness loop (Sonnet 5.5, offline, dev split).** The versions are v0 to v7 (see `experiments/tbench/history.md`
