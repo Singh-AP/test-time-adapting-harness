@@ -1,220 +1,246 @@
 # test-time-adapting-harness
 
-An agent harness that adapts itself at test time, following *Harness Learning Enables Generalizable
-Test-Time Adaptation* (Zhang et al., arXiv:2609.35738), built on the [pi](https://github.com/earendil-works/pi)
-agent toolkit.
+**A coding-agent harness that improves itself from its own failures.** It turns the
+[pi](https://github.com/earendil-works/pi) coding agent into a [Terminal-Bench](https://www.tbench.ai/) agent. An
+agentic proposer reads failure reports from development tasks and rewrites the harness: its prompts, review loop and
+recovery logic. The repository also implements the general method, *Harness Learning Enables Generalizable
+Test-Time Adaptation* (Zhang et al., arXiv:2609.35738), for reasoning and question-answering tasks.
 
-A *harness* is the program that organizes calls to a frozen solver model, tool use and information flow. A
-*proposer* model reads the task description, the current harness and an execution report, and edits the
-harness. Repeating this on development questions adapts the harness to a new task without changing any model
-weights (paper Eq. 4):
+## What this harness improves
 
-```
-for t = 1..T:
-    report_t   = run h_{t-1} on feedback questions Q_fb, summarize traces and failures
-    y_i        ~ proposer(task, h_{t-1}, report_t)          i = 1..G   (SEARCH/REPLACE edits)
-    h'_i       = Apply(h_{t-1}, y_i)                        (invalid if edits do not apply or fail screens)
-    h_t        = Select(h_{t-1}, {h'_i}; Q_score)           (greedy-improve or best-of-G)
-    report J(h_t; Q_eval) on held-out questions             (never shown to the proposer)
-```
+### Terminal-Bench 4.0: +17 points on tasks it never saw
 
-How it uses pi:
+The two runs use the same model (Claude Sonnet 5.5 at max effort), the same tasks and one trial per task. Only the
+harness differs:
 
-- Harnesses are JavaScript programs run in **pi-codemode**'s QuickJS sandbox, one fresh VM per question. Their
-  only capabilities are host-injected functions with per-question budgets and full tracing: `llm()` (the frozen
-  solver), `python()` (guarded subprocess), `search()` (retrieval tasks), `log()`.
-- Solver and proposer models are **pi-ai** models (Amazon Bedrock provider; any pi-ai provider works).
+| Harness | Held-out tasks (24) | Dev tasks (22) | All (46) |
+|---|---|---|---|
+| v0: a prompt, an environment probe and one finish check | 0.500 | 0.773 | 0.630 |
+| **v6: this harness** | **0.667** | 0.727 | **0.696** |
 
-Components:
+- **Held-out tasks** never reached any report, proposal or harness decision, so their gain measures generalization
+  rather than tuning.
+- **Dev tasks** were already near the model's ceiling, and their difference is within run-to-run noise.
+- **Offline runs.** Task containers had no internet access, which leaves the 46 CPU tasks whose reference solutions
+  pass without it. The scores are not comparable with the public leaderboard, which runs online on 66 tasks with 5
+  trials. Details are in [results/tbench-offline.md](results/tbench-offline.md).
 
-- **Engine** (`src/core`): sandboxed harness execution, execution reports, SEARCH/REPLACE edits, static screens,
-  greedy and best-of-G selection, the Eq. 4 loop with artifacts and resume, single-step evaluation, Eq. 8/11
-  rewards and GRPO group advantages.
-- **Proposers**: a single-shot prompt proposer (paper-faithful), and an **agentic proposer** that is a pi
-  coding-agent session editing `harness.js` in a scratch workspace with `check_harness` and `run_feedback`
-  tools (paper App. F future work).
-- **Tasks**: Reasoning Gym families (real `reasoning_gym` generators and verifiers) and multi-hop QA (HotpotQA,
-  MuSiQue, 2WikiMultihopQA) over pooled paragraph corpora with BM25.
-- **pi package**: `adapt_harness` tool, `/adapt` and `/harness-runs` commands, so pi itself runs test-time
-  harness adaptation.
+What changed between v0 and v6, and why each piece is there:
 
-## Setup
+1. **Cut-off replies no longer end the run.**
+   - The problem: in the first runs, 5 of 28 and 6 of 18 sessions ended on a reply cut off by the output limit.
+     pi treats a reply without tool calls as the end of the turn, so the agent stopped mid-task and reported
+     success.
+   - The fix: the harness detects a truncated reply, compacts the context first when it is large, and tells the
+     model to continue, up to 6 times.
+   - It also uses the model's full 1M-token window, with compaction near 400k tokens. Before, a window override
+     had left as little as 1k tokens of room for output.
+2. **Guidance on how hidden tests are usually failed.** An agentic proposer (Claude Opus 5.5) read the dev-task
+   failure report and wrote six rules into the system prompt:
+   - treat "infeasible", a missing credential or a near miss as a sign of a remaining bug;
+   - use every provided input;
+   - settle each judgment call with evidence;
+   - expect the tests to substitute other inputs;
+   - apply fixes where the task requires, not in a scratch area;
+   - use the time budget instead of stopping with known gaps.
+3. **Tie-breakers for judgment calls.** A second proposal found that agents named the right alternative as a
+   "judgment call", then picked the wrong one. The harness now says how to choose:
+   - the reading under which the task's goal works out;
+   - the field's standard method;
+   - the general case over a simplifying assumption;
+   - the strict reading of a prohibition.
+4. **An independent reviewer with a targeted checklist.** When the agent stops, a fresh session audits the container
+   against the task statement and sends evidence-backed problems back, for up to two rounds. It may write only
+   under `/tmp/review`. A generic reviewer passed 16 of 18 trials, failed ones included. With a checklist of the
+   same failure patterns, the reviewer started catching real problems.
+5. **A finish audit.** The first two times the agent stops, it must list every caveat, unused input and judgment
+   call in its work, then resolve each one. If the summary would still need a limitations section, it is not done.
+6. **A fallback model when the provider blocks a reply.** Claude Opus 5.5's content filter on Amazon Bedrock blocked
+   replies on 6 of 46 tasks (security, cryptography and biology topics). With `--ak fallback_model=...` the run
+   switches models instead of ending; this recovered 3 of the 6.
+7. **A tool layer built for task containers.**
+   - The agent and its credentials stay on the host. Only commands run in the container, through Harbor's
+     environment API.
+   - Each bash command runs as a script under `timeout`, with stdin from `/dev/null` and its output in a log file.
+   - The tool returns the head and tail of the output, with the exit status as the last line of stdout. Harbor
+     merges stderr into stdout, so a status on stderr would be lost.
+   - Files are copied through `exec` as the task's own user. `docker cp` left root-owned files that non-root tasks
+     could not read.
+   - Task-provided skills and MCP servers are supported.
 
-    npm install --ignore-scripts
-    uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python reasoning-gym==0.1.19
+Changes that did not help, kept for the record:
 
-Credentials come from the AWS credential chain, so set `AWS_PROFILE` (and optionally `AWS_REGION`, default
-`us-east-1`). If session credentials expire during a long run, Bedrock calls pause and resume once the
-credentials file is refreshed.
+- **A test designer** that predicts the hidden tests before the agent starts (v7) scored 0.33 on the hardest dev
+  tasks against v6's 0.67. Its predictions were sometimes wrong, and the agent treated them as requirements.
+- **A reviewer without the checklist** passed almost everything.
+- **Opus 5.5 with the same harness** scored 0.587 on all 46 tasks. On the hardest dev tasks it matched Sonnet 5.5
+  task for task.
 
-## Usage
+The versions and their change notes are in [harnesses/tbench/](harnesses/tbench/), and the process is in
+[docs/terminal-bench.md](docs/terminal-bench.md).
 
-    # Score a harness
-    node src/cli.ts eval --task rg:maze --harness seeds/rg-seed.js --solver us.meta.llama3-1-8b-instruct-v1:0
+### Harness Learning on reasoning and QA tasks
 
-    # Test-time adaptation, Reasoning Gym protocol (5 rounds, one proposal, keep only improvements)
-    node src/cli.ts adapt --task rg:maze --rounds 5 --proposer us.anthropic.claude-opus-5-5
+In these runs, a proposer model edits a JavaScript harness around a frozen solver (Qwen3-32B). Held-out questions
+are never shown to the proposer or used for selection.
 
-    # Multi-hop QA protocol preset (best-of-G, disjoint feedback/scoring questions)
-    node src/cli.ts adapt --task <spec> --protocol qa --rounds 10 --proposals 8
+| Benchmark | Seed harness | Adapted | Proposer |
+|---|---|---|---|
+| Reasoning Gym, 8 families, 5 rounds | 0.201 | 0.907 | Claude Opus 5.5, $1.64 |
+| Reasoning Gym, 8 families, 5 rounds | 0.199 | 0.891 | Claude Haiku 4.5, $0.50 |
+| HotpotQA, 6 rounds | 0.453 | 0.547 (peak 0.560) | Claude Opus 5.5 |
+| MuSiQue, 6 rounds | 0.273 | 0.260 (peak 0.420) | Claude Opus 5.5 |
+| 2WikiMultihopQA, 6 rounds | 0.500 | 0.653 (peak 0.680) | Claude Opus 5.5 |
 
-    # Single-step: eight independent proposals from the seed, scored on held-out questions
-    node src/cli.ts independent --task rg:maze --proposals 8
+- **Noisy selection.** MuSiQue's last round advanced to a worse candidate, because the QA protocol picks the best
+  of 4 candidates on only 32 scoring questions.
+- **Agentic proposer.** A pi session that can test its revisions on feedback questions adapts faster than a
+  single-shot proposer: 0.753 against 0.614 after one round.
+- **Transfer.** A playbook distilled from earlier runs raised a weak proposer's gain on unseen families from +0.023
+  to +0.101.
 
-    # Agentic proposer: a pi coding-agent session that edits, checks and test-runs the harness
-    node src/cli.ts adapt --task rg:word_ladder --proposer-mode agentic --feedback-runs 3
+See [docs/harness-learning.md](docs/harness-learning.md) and [results/](results/).
 
-    node src/cli.ts families      # Reasoning Gym families
-    node src/cli.ts --help        # all options
+## Quick start
 
-Task specs: `toy:addition` (offline smoke task), `rg:<family>` (any Reasoning Gym family; development and
-held-out questions come from disjoint generator seeds), and `qa:hotpotqa|musique|2wiki` (after preparing data,
-see below).
-
-Every run writes `runs/<id>/`:
-
-| Path | Content |
-|---|---|
-| `config.json`, `seed.js` | task, protocol configuration, seed harness |
-| `round-00/heldout.*` | seed held-out evaluation |
-| `round-NN/feedback.*`, `report.md` | parent evaluation on Q_fb and the execution report given to the proposer |
-| `round-NN/candidates/cK/` | `transcript.md` (prompts and responses), `proposal.json`, `harness.js`, `score.*` |
-| `round-NN/selected.js`, `heldout.*`, `round.json` | retained harness, its held-out score, round summary |
-| `state.json` | resume point (rerun the same command with `--run-dir` to continue) |
-| `final.js`, `summary.{json,md}` | adapted harness and per-round results with token usage and cost |
-
-`*.json` evaluations hold per-question outcomes; `*.traces.jsonl` hold every solver, python and search call.
-
-## Results
-
-All runs: solver `qwen.qwen3-32b-v1:0` on Amazon Bedrock, held-out questions never shown to the proposer or used
-for selection, one run per configuration. Tables and per-round curves are in `results/`.
-
-**Reasoning Gym, 8 families, 5 rounds** (paper protocol: one proposal per round, kept only if the 25-question
-development score improves; 75 held-out questions per family):
-
-| Proposer | Mean held-out, seed -> final | Proposer cost |
-|---|---|---|
-| Claude Opus 5.5 | 0.201 -> 0.907 | $1.64 |
-| Claude Haiku 4.5 | 0.199 -> 0.891 | $0.50 |
-
-Seven of eight families reach 0.96-1.00 in the first round. The structural audit (`results/audit-rg-*.md`) shows
-why: these proposers rewrite the harness into an exact algorithm (JavaScript for Opus, Python for Haiku) with the
-solver as a fallback, the paper's "algorithm" class. word_ladder, which needs vocabulary the harness cannot
-compute, improves slowly through solver-plus-search compositions (0.07 -> 0.26 with Opus).
-
-**Multi-hop QA, 6 rounds** (paper QA protocol: 4 proposals per round, 6 feedback and 32 disjoint scoring
-questions, advance to the best candidate; proposer Opus 5.5; 150 held-out questions per benchmark):
-
-| Benchmark | Seed | Peak | Final | HotpotQA-adapted harness |
-|---|---|---|---|---|
-| HotpotQA | 0.453 | 0.560 | 0.547 | 0.547 |
-| MuSiQue | 0.273 | 0.420 | 0.260 | 0.367 |
-| 2WikiMultihopQA | 0.500 | 0.680 | 0.653 | 0.647 |
-
-Gains accumulate over rounds, as in the paper, and the harness adapted on HotpotQA transfers to the two
-benchmarks it never saw. MuSiQue's final round fell from its 0.420 peak: best-of-G advances even to a worse
-candidate, chosen on only 32 noisy scoring questions.
-
-**Agentic versus single-shot proposer** (Haiku 4.5, 8 new families, 3 rounds): mean held-out after round 1 is
-0.753 agentic versus 0.614 single-shot, and 0.784 versus 0.764 after round 3. The agentic pi session adapts faster
-because it can test revisions on feedback questions, at about 4 times the proposer cost
-(`results/agentic-vs-single.md`).
-
-**Outer loop without weight updates** (`results/transfer.md`): a playbook distilled from 47 revision episodes on
-training families raised a weak proposer's (Qwen3-32B) mean held-out gain on 8 unseen families from +0.023 to
-+0.101. `tta export` turns runs into GRPO groups (Eq. 8/11 rewards, group advantages) and an SFT corpus with the
-App. B.2 filter, for offline proposer training.
-
-Solver calibration: `results/calibration.md`.
-
-## Use from pi
-
-The repository is a pi package. Load it for one session, or install it:
-
-    pi -e ./src/pi/extension.ts
-    pi install git:github.com/Singh-AP/test-time-adapting-harness
-
-It adds:
-
-- `adapt_harness` tool: pi's agent can adapt a harness for a task and report held-out scores.
-- `/adapt <task> [--rounds N] [--proposals G] [--protocol rg|qa] [--solver ID] [--proposer ID] [--dev N] [--heldout N]`
-- `/harness-runs`: recent runs with seed and final held-out scores.
-
-Non-interactive example:
-
-    pi -p --no-session --provider amazon-bedrock --model us.anthropic.claude-sonnet-5 --tools adapt_harness \
-      -e ./src/pi/extension.ts "Use adapt_harness on rg:count_primes with 1 round, then report the held-out scores."
-
-## Multi-hop QA data
-
-    for d in hotpotqa musique 2wiki; do mkdir -p data/raw/$d; done
-    curl -L -o data/raw/hotpotqa/validation.parquet https://huggingface.co/api/datasets/hotpotqa/hotpot_qa/parquet/distractor/validation/0.parquet
-    curl -L -o data/raw/musique/validation.parquet https://huggingface.co/api/datasets/dgslibisey/MuSiQue/parquet/default/validation/0.parquet
-    curl -L -o data/raw/2wiki/validation.parquet https://huggingface.co/api/datasets/framolfese/2WikiMultihopQA/parquet/default/validation/0.parquet
-    uv pip install --python .venv/bin/python pyarrow==21.0.0
-    for d in hotpotqa musique 2wiki; do .venv/bin/python -I python/prepare_qa.py $d data/raw/$d/validation.parquet data/qa/$d; done
-
-Each corpus pools the support and distractor paragraphs of the dev split (HotpotQA 66,635, MuSiQue 21,100,
-2Wiki 56,687 paragraphs). Questions are split into disjoint development and held-out sets stratified by type.
-
-## Writing a harness
-
-```js
-// Available globals: TASK, llm(), python(), search(), log(). No other I/O exists.
-async function solve(question) {
-	const reply = await llm({ system: "Solve the problem. End with: Answer: <answer>", prompt: question });
-	return reply.split(/answer\s*:/i).pop().trim();
-}
-```
-
-`llm(request)` takes a prompt string or `{system, prompt, messages, temperature, maxTokens}` and returns the
-solver's text. `python(code, {timeoutMs, stdin})` returns `{stdout, stderr, exitCode, timedOut}`.
-
-## Terminal-Bench
-
-`src/tbench/` turns the pi coding agent into a Harbor agent for [Terminal-Bench](https://www.tbench.ai/). Its
-harness can be adapted with the same loop that adapts harnesses for reasoning and QA tasks.
-
-- **Agent.** `python/tbench/harbor_agent.py:PiHarnessAgent` runs a pi session on the host. Its tools (a bash tool
-  built for containers, plus pi's read, edit and write) execute inside the task container through Harbor's
-  environment API. Model credentials never enter the container.
-- **Harness.** A harness is a directory, for example `harnesses/tbench/v1/`, holding:
-  - the system prompt;
-  - the first message, with an environment probe;
-  - a finish check;
-  - an independent reviewer that audits the container before the agent may finish;
-  - settings: thinking level, bash limits, compaction and time warnings.
-- **Harness learning.**
-  - `node src/tbench/cli.ts report` builds an execution report from dev-split trials.
-  - `node src/tbench/cli.ts propose` has an agentic proposer edit a copy of the harness.
-  - Edits that mention development tasks or hidden tests are rejected.
-  - The split in `experiments/tbench/splits/tb4.json` keeps held-out tasks out of every report.
-- **Runner hosts.**
-  - `python/tbench/aws_infra.py` launches EC2 hosts with Docker, Harbor and this repository.
-  - Each host has an instance role that may only invoke Bedrock, and IMDSv2 hop limit 1 keeps containers away
-    from that role.
-  - `experiments/tbench/run.sh` starts a job on a host; `sync.sh` and `summarize.py` collect the results.
+You need Node.js 22.19 or newer, Python 3.12 ([uv](https://docs.astral.sh/uv/) recommended) and, for
+Terminal-Bench, Docker.
 
 ```bash
-# On a runner host (see docs/HANDOVER.md §11 for provisioning)
-experiments/tbench/run.sh smoke harnesses/tbench/v1 global.anthropic.claude-sonnet-5-5 dev exclude 8
-# Check the tool layer in real task containers without model calls
-experiments/tbench/run.sh selftest harnesses/tbench/v1 global.anthropic.claude-sonnet-5-5 all exclude 32 --ak self_test=true --disable-verification
+git clone https://github.com/Singh-AP/test-time-adapting-harness.git
+cd test-time-adapting-harness
+scripts/install.sh    # Node packages, .venv-harbor (Harbor) and .venv (reasoning-gym); `tbench` or `learning` for one
 ```
+
+### Choose a model
+
+Write models as `provider/model-id`, for any [pi-ai](https://github.com/earendil-works/pi) provider. Credentials come
+from the provider's usual environment variable. A bare model id is an Amazon Bedrock model and uses the AWS
+credential chain.
+
+| Provider | Model argument | Credentials |
+|---|---|---|
+| Anthropic | `anthropic/claude-sonnet-5-5` | `ANTHROPIC_API_KEY` |
+| OpenAI | `openai/gpt-5.5` | `OPENAI_API_KEY` |
+| OpenRouter | `openrouter/anthropic/claude-sonnet-5.5` | `OPENROUTER_API_KEY` |
+| Amazon Bedrock | `global.anthropic.claude-sonnet-5-5` | an AWS profile or environment credentials |
+
+```bash
+node scripts/check-model.ts anthropic/claude-sonnet-5-5    # one short completion
+```
+
+### Run Terminal-Bench
+
+```bash
+# Check the tool layer in 4 task containers, without model calls
+scripts/tbench.sh -m anthropic/claude-sonnet-5-5 --ak self_test=true --disable-verification -l 4 -n 4
+
+# One task (names are listed in experiments/tbench/splits/tb4.json), then the whole benchmark
+scripts/tbench.sh -m anthropic/claude-sonnet-5-5 -i terminal-bench/cargo-flight-dispatch
+scripts/tbench.sh -m anthropic/claude-sonnet-5-5 -n 8 --max-retries 2 --retry-include RuntimeError
+```
+
+`scripts/tbench.sh` runs Harbor with this agent and the v6 harness. `--harness <dir>` selects another harness. Other
+options go to `harbor run`, including these agent options:
+
+| Option | Effect |
+|---|---|
+| `--ak thinking=<level>` | Overrides the harness thinking level (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) |
+| `--ak fallback_model=<model>` | Switches to this model after a reply the provider blocked |
+| `--ak time_budget_sec=<s>` | Agent time budget; the default is the task's timeout |
+| `--ak aws_profile=<name>` | AWS profile for Bedrock when `AWS_PROFILE` is unset |
+
+Each trial writes these files to `jobs/<job>/<trial>/agent/`:
+
+- `transcript.md`;
+- `agent-result.json`: the stop reason, finish checks, recoveries, reviews, tokens and cost;
+- `session.jsonl`;
+- one `review-N.md` per reviewer round.
+
+### Improve the harness from your own runs
+
+```bash
+node src/tbench/cli.ts report --jobs jobs/<job>          # execution report from dev-split trials only
+node src/tbench/cli.ts propose --parent harnesses/tbench/v6 --jobs jobs/<job> --out harnesses/tbench/v8 \
+  --proposer anthropic/claude-opus-5-5
+node experiments/tbench/compare.ts v6=jobs/<job> v8=jobs/<new-job>    # paired, per-task comparison
+```
+
+The proposer edits a copy of the parent harness. Edits that name a dev task or a failed hidden test are rejected,
+so the harness cannot memorize. The split in `experiments/tbench/splits/tb4.json` keeps held-out tasks out of every
+report.
+
+### Adapt a harness for reasoning or QA tasks
+
+```bash
+node src/cli.ts adapt --task rg:maze --rounds 5 --solver <model> --proposer anthropic/claude-opus-5-5
+node src/cli.ts --help
+```
+
+### Use it from pi
+
+The repository is a pi package. Loaded into a pi session from the clone, it adds an `adapt_harness` tool and the
+`/adapt` and `/harness-runs` commands:
+
+```bash
+node_modules/.bin/pi -e ./src/pi/extension.ts
+```
+
+## How it works
+
+```
+ host                                                  task container (Docker)
+ ┌─────────────────────────────────────────┐          ┌─────────────────────────────┐
+ │ Harbor                                  │          │                             │
+ │  └ PiHarnessAgent (python/tbench) ◀─────┼── exec ─▶│ bash: scripts under timeout │
+ │        ▲ JSON lines on stdin/stdout     │          │ files: read and written as  │
+ │        ▼                                │          │ the task's own user         │
+ │  pi session (src/tbench)                │          │ no model credentials        │
+ │   harness prompts, finish audit,        │          └─────────────────────────────┘
+ │   reviewer session, recoveries ─────────┼──▶ model provider API
+ └─────────────────────────────────────────┘
+```
+
+A Terminal-Bench harness is a directory. The adaptation loop may change any of its files:
+
+| File | Role |
+|---|---|
+| `system.md` | System prompt: how to work, how hidden tests are usually failed, tie-breakers |
+| `user.md` | First message, with `{{instruction}}`, `{{environment}}` and `{{time_budget}}` |
+| `probe.sh` | Environment snapshot (OS, tools, cgroup limits) for the first message |
+| `finish.md` | Audit prompt sent when the agent stops |
+| `review.md`, `review-request.md`, `review-followup.md` | The independent reviewer and its hand-off |
+| `harness.json` | Thinking level, finish checks, bash limits, context window, compaction, time warnings, review rounds, recovery limits |
+
+## Repository
+
+| Path | Contents |
+|---|---|
+| `src/tbench/` | The Terminal-Bench agent: session loop, container tools, bridge, MCP, self-test, report and proposer |
+| `python/tbench/` | The Harbor agent, Harbor patches, and optional AWS runner hosts |
+| `harnesses/tbench/` | Harness versions v0 to v7, each with `CHANGES.md` |
+| `experiments/tbench/` | Benchmark runs, summaries, comparisons, the dev/held-out split, offline mode |
+| `src/core/`, `src/proposers/`, `src/tasks/` | The Harness Learning engine, proposers and tasks |
+| `src/pi/` | The pi package |
+| `scripts/` | `install.sh`, `tbench.sh`, `check-model.ts` |
+| `results/` | Result tables for every experiment |
+| `docs/` | [Terminal-Bench guide](docs/terminal-bench.md), [Harness Learning guide](docs/harness-learning.md), [development notes](docs/development.md) |
 
 ## Safety
 
-Proposer-written harness code runs only inside QuickJS (no filesystem, network, process or timers). Solver-written
-Python runs through `python/guard.py`: scrubbed environment (no AWS variables), temp working directory, resource
-limits, and an audit hook that blocks sockets, subprocesses, native library loading and file access outside the
-scratch directory and the Python installation. This is defense in depth, not a security boundary; use a container
-for untrusted settings. On macOS the guard also sets RLIMIT_NPROC to 0; on Linux it relies on the audit hook and on
-disabling `_posixsubprocess.fork_exec`, so prefer a container there.
+- **Model credentials** never enter task containers. The agent runs on the host, and only its commands run inside.
+- **Harness code written by a proposer** runs only in a QuickJS sandbox, with no filesystem, network, process or
+  timers.
+- **Solver-written Python** runs through a guard (`python/guard.py`): a scrubbed environment, resource limits and an
+  audit hook that blocks sockets, subprocesses and file access outside a scratch directory. This is defense in
+  depth, not a security boundary, so use a container for untrusted settings.
 
-The agentic proposer's file tools are restricted to its scratch workspace (pi's `@` and `~` path forms included).
+## Tests
 
-## Test
+```bash
+npm test && npm run check && npm run test:py
+```
 
-    npm test
-    npm run check
+## License
+
+MIT

@@ -133,7 +133,7 @@ v6 was developed with Sonnet 5.5; these runs swap in Opus 5.5 at max effort with
 |---|---|---|---|---|---|
 | v6 + Sonnet 5.5 | 0.727 | **0.667** | **0.696** | 1,203 | 209 |
 | v6 + Opus 5.5 | 0.682 | 0.500 | 0.587 | 1,120 | 147 |
-| v6 + Opus 5.5, Sonnet fallback after a blocked reply | 0.773 | 0.542 | 0.652 | 1,247 | |
+| v6 + Opus 5.5, Sonnet fallback after a blocked reply | 0.773 | 0.542 | 0.652 | 1,247 (both runs) | |
 
 - The model provider's content filter blocked Opus replies on 6 tasks (security, cryptography and biology topics):
   2 at the first message and 4 mid-run; retrying does not help. With `--ak fallback_model=<sonnet>`, the run
