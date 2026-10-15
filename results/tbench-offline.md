@@ -110,3 +110,18 @@ Notes:
   Their transcripts show the model rationalizing against the guidance. They look capability-limited for Sonnet.
 - The reviewer is worth its cost (about 40 to 50% more per trial) only with the targeted checklist (v4, v6). The
   generic reviewer (v2r) returned PASS on 16 of 18 trials, including failed ones.
+
+## Generalization: v0 against v6 on all 46 CPU tasks (Sonnet 5.5, offline, 1 trial per task)
+
+Paired on the 45 tasks both runs finished (v6 had one trial still running):
+
+| Split | Tasks | v0 | v6 |
+|---|---|---|---|
+| held-out | 23 | 0.522 | **0.696** |
+| dev | 22 | 0.773 | 0.727 |
+| all | 45 | 0.644 | **0.711** |
+
+- The gain comes from the held-out half: tasks no report, proposal or harness decision ever saw. Dev is near
+  the model's ceiling, and its difference is within run-to-run noise.
+- v6 costs 2.2 times as much per task ($1,168 against $532 for the CPU set). Its runs are about twice as long, from
+  the reviewer and from the prompts that push the agent to use its time budget.
