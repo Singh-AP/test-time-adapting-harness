@@ -439,28 +439,28 @@ continue with **TB 4.0 offline**, and the guardrail must not be bypassed.
     models after a blocked reply) and `experiments/tbench/filtered.py <job>` to find runs that ended on a blocked
     reply. Report both the Opus-only score and the score with fallback.
 
-**Status at writing (2026-10-15 03:50).**
+**Status at writing (2026-10-15, after the Opus run).**
 
-- **Harness loop (Sonnet 5.5, offline, dev split).** The versions are v0 to v7 (see `experiments/tbench/history.md`
-  and the `CHANGES.md` in each harness).
-  - The best is **v6**: v3's failure-pattern guidance, v5's judgment-call tie-breakers, and v4's reviewer with a
-    targeted checklist. On the hard dev tasks (2 trials each) it scores 0.67 against 0.44 for v3.
-  - v7 (a test designer) hurt and was rejected.
-  - Three dev tasks fail in every version (`bun-sourcemap-leak`, `cargo-flight-dispatch`,
-    `freight-dispatch-shift`); they look capability-limited.
-- **Baselines.** v0 offline on 46 CPU tasks: 0.630 (dev 0.773, held-out 0.500), $546. v0 GPU: `fp8` 1, `math-eval`
-  1, `jax` still running at writing.
-- **Running.**
-  - `v6-full`: Sonnet on all 46 CPU tasks, the generalization check. Early paired held-out result: v0 0.455 vs
-    v6 0.636 on 11 tasks.
-  - `v6-opus-1`: **Opus 5.5** (`global.anthropic.claude-opus-5-5`) with v6, offline, all 46 CPU tasks, 1 trial.
-  - The GPU host queue runs `v6-full-gpu`, then `v6-opus-1-gpu` (`~/gpu-queue-3.sh`, `~/gpu-queue-4.sh`).
-- **Spend.** About $2.9k on Bedrock by 21:00 on 2026-10-14, most of it Sonnet trials. Opus one-trial runs cost about
-  $1.5 to 2k per full pass.
-- **Next.**
-  - Summarize `v6-full` against `v0-off`, per split, with `experiments/tbench/compare.ts` and `summarize.py`.
-  - Report the Opus result.
-  - Decide with the user on 5 trials per task (about $6k), and on offline versus online (BPA is still `off`, so an
-    online run would be comparable with the leaderboard).
-- **Tools.** `experiments/tbench/{run.sh, sync.sh, summarize.py, compare.ts, wait.sh, split.py, offline.sh,
-  harbor.sh}`; `TTA_TASKS=...` runs an explicit task list.
+- **Harness loop (Sonnet 5.5, offline, dev only):** v0 to v7, with notes in `experiments/tbench/history.md` and
+  each `CHANGES.md`. The best is **v6**: v3's failure-pattern guidance, v5's judgment-call tie-breakers, and v4's
+  reviewer with a targeted checklist. v7 (the test designer) was rejected.
+- **Full offline CPU set, 46 tasks, 1 trial each:**
+
+  | Configuration | Score |
+  |---|---|
+  | v0 + Sonnet | 0.630 (dev 0.773, held-out 0.500), $546 |
+  | v6 + Sonnet | **0.696** (dev 0.727, held-out 0.667), $1,203 |
+  | v6 + Opus 5.5, Opus only | 0.587, $1,120 |
+  | v6 + Opus 5.5 with Sonnet fallback on blocked replies | 0.652 (the 6 filtered tasks re-run as `v6-opus-fb-1`, 3 of 6 solved) |
+
+  None of these is leaderboard-comparable (online, 66 tasks, 5 trials: 64.85% is the SOTA).
+- **Was running at writing:**
+  - `v6-opus-hard`: Opus with v6 on the 8 hard dev tasks, 2 trials each, the baseline for Opus-specific tuning.
+  - GPU host: `v6-full-gpu` (Sonnet), then `v6-opus-1-gpu`, through `~/gpu-queue-3.sh` and `~/gpu-queue-4.sh`.
+  - The user was asked whether to stop these.
+- **Open user decisions:** an online run (BPA is still `off`; about $1.7k for 1 trial per task, about $8k for 5),
+  Opus-specific tuning (about $300 to 400 per round), or stop. Also a budget cap. Total Bedrock spend so far is
+  about $7k. The /goal was cleared by the user.
+- **Tools:** `experiments/tbench/{run.sh, sync.sh, summarize.py, compare.ts, wait.sh, split.py, offline.sh,
+  harbor.sh, filtered.py, check-model.ts}`. Use `TTA_TASKS="a b"` for explicit task lists, `TTA_OFFLINE=1` for the
+  offline set, and `--ak fallback_model=...` for the fallback.
