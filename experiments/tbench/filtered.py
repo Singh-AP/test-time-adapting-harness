@@ -13,8 +13,11 @@ import sys
 
 def ended_filtered(session: pathlib.Path) -> bool:
 	last = None
-	for line in session.read_text().splitlines():
-		message = json.loads(line).get("message") or {}
+	for line in session.read_text(errors="replace").splitlines():
+		try:
+			message = json.loads(line).get("message") or {}
+		except ValueError:
+			continue
 		if message.get("role") == "assistant":
 			last = message
 	return bool(last) and last.get("stopReason") == "error" and "content_filtered" in (last.get("errorMessage") or "")
