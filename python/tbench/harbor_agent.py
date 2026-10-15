@@ -194,6 +194,9 @@ class PiHarnessOptions(AgentOptions):
 	time_budget_sec: float | None = Field(default=None, description="Agent time budget; default: the task timeout.")
 	node: str = Field(default="node", description="Node.js executable.")
 	self_test: bool = Field(default=False, description="Exercise the tool layer in the container, no model calls.")
+	fallback_model: str | None = Field(
+		default=None, description="Bedrock model to finish the run on when the provider blocks a reply."
+	)
 	aws_profile: str = Field(
 		default="tta-instance", description="AWS profile for Bedrock when AWS_PROFILE is unset (runner hosts)."
 	)
@@ -230,6 +233,8 @@ class PiHarnessAgent(BaseAgent):
 			config["thinkingLevel"] = options.thinking
 		if options.self_test:
 			config["selfTest"] = True
+		if options.fallback_model:
+			config["fallbackModelId"] = bedrock_model_id(options.fallback_model)
 		if self.skills_dir:
 			config["skillsDir"] = self.skills_dir
 		if self.mcp_servers:

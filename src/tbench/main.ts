@@ -25,6 +25,8 @@ interface AgentConfig {
 	selfTest?: boolean;
 	skillsDir?: string;
 	mcpServers?: McpServer[];
+	/** Bedrock model to switch to when the provider blocks a reply. */
+	fallbackModelId?: string;
 }
 
 async function main(): Promise<void> {
@@ -60,6 +62,10 @@ async function main(): Promise<void> {
 	});
 	const model = runtime.getModel("amazon-bedrock", config.modelId);
 	if (!model) throw new Error(`Unknown amazon-bedrock model "${config.modelId}"`);
+	const fallbackModel = config.fallbackModelId
+		? runtime.getModel("amazon-bedrock", config.fallbackModelId)
+		: undefined;
+	if (config.fallbackModelId && !fallbackModel) throw new Error(`Unknown fallback model "${config.fallbackModelId}"`);
 	const harness = await loadHarness(config.harnessDir);
 	if (config.thinkingLevel) harness.thinkingLevel = config.thinkingLevel;
 	const result = await runTerminalAgent({
@@ -72,6 +78,7 @@ async function main(): Promise<void> {
 		logsDir: config.logsDir,
 		skillsDir: config.skillsDir,
 		mcpServers: config.mcpServers,
+		fallbackModel,
 		onUsage: (usage) => bridge.emit("usage", { ...usage }),
 	});
 	bridge.emit("done", { ...result });

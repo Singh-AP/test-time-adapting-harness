@@ -224,6 +224,34 @@ describe("truncated replies", () => {
 		).toBe(3);
 	});
 
+	test("continueTruncated calls onFiltered before each re-prompt after a filtered reply", async () => {
+		const messages: Record<string, unknown>[] = [
+			{ role: "assistant", stopReason: "error", errorMessage: "content_filtered" },
+		];
+		const events: string[] = [];
+		const session = {
+			messages,
+			prompt: async (text: string) => {
+				events.push(`prompt:${text}`);
+				messages.push({ role: "user" }, { role: "assistant", stopReason: "stop" });
+			},
+			compact: async () => {},
+			getContextUsage: () => ({ tokens: 10, contextWindow: 1_000_000 }),
+		};
+		await continueTruncated(session, {
+			maxRecoveries: 1,
+			maxFilterRetries: 3,
+			canContinue: () => true,
+			continuePrompt: () => "C",
+			filteredPrompt: () => "F",
+			onFiltered: async () => {
+				events.push("fallback");
+			},
+			onError: () => {},
+		});
+		expect(events).toEqual(["fallback", "prompt:F"]);
+	});
+
 	test("continueTruncated stops at the limit and when continuing is not allowed", async () => {
 		const always = {
 			messages: [{ role: "assistant", stopReason: "length" }],
@@ -264,6 +292,30 @@ describe("truncated replies", () => {
 			cwd: root,
 		});
 		expect(result.reviews[0].issues).toContain("result.txt has the wrong value");
+	});
+});
+
+describe("fallback model", () => {
+	test("a reply blocked by the provider switches the run to the fallback model", async () => {
+		const { env, root } = await localEnvironment();
+		const { runtime, model } = await fauxRuntime([
+			fauxAssistantMessage([], { stopReason: "error", errorMessage: "Provider stopped with: content_filtered" }),
+			fauxAssistantMessage([fauxToolCall("write", { path: "out.txt", content: "ok\n" })], { stopReason: "toolUse" }),
+			fauxAssistantMessage([fauxText("Done.")]),
+		]);
+		const result = await runTerminalAgent({
+			instruction: "Write out.txt",
+			env,
+			runtime,
+			model,
+			fallbackModel: model,
+			harness: testHarness({ finishCheck: "" }),
+			timeBudgetSec: 600,
+			cwd: root,
+		});
+		expect(result.fallbackUsed).toBe(true);
+		expect(result.errors.join(" ")).toContain("switched to fallback model");
+		expect(await readFile(join(root, "out.txt"), "utf8")).toBe("ok\n");
 	});
 });
 

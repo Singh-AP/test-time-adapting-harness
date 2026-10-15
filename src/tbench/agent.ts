@@ -55,6 +55,8 @@ export interface TerminalAgentOptions {
 	skillsDir?: string;
 	/** Task-provided MCP servers (Harbor's MCPServerConfig). */
 	mcpServers?: McpServer[];
+	/** Model to switch to for the rest of the run when the provider blocks a reply (content filter). */
+	fallbackModel?: Model<Api>;
 }
 
 export interface McpServer {
@@ -79,6 +81,8 @@ export interface TerminalAgentResult extends AgentUsage {
 	finishChecks: number;
 	/** Replies cut off by the output limit that were continued. */
 	lengthRecoveries: number;
+	/** Whether the run switched to the fallback model after a filtered reply. */
+	fallbackUsed: boolean;
 	reviews: ReviewRecord[];
 	finalText: string;
 	errors: string[];
@@ -286,6 +290,8 @@ export async function continueTruncated(
 		onError: (m: string) => void;
 		maxFilterRetries?: number;
 		filteredPrompt?: () => string;
+		/** Called before each re-prompt after a filtered reply (the agent switches to its fallback model). */
+		onFiltered?: () => Promise<void>;
 	},
 ): Promise<number> {
 	let truncations = 0;
@@ -304,6 +310,7 @@ export async function continueTruncated(
 			await s.prompt(o.continuePrompt());
 		} else if (endsFiltered(s) && filtered < (o.maxFilterRetries ?? 0)) {
 			filtered++;
+			await o.onFiltered?.();
 			await s.prompt((o.filteredPrompt ?? o.continuePrompt)());
 		} else break;
 	}
@@ -353,7 +360,10 @@ export async function runTerminalAgent(o: TerminalAgentOptions): Promise<Termina
 		createWriteToolDefinition(cwd, { operations: files.write }),
 		...mcp.tools,
 	];
-	const model = { ...o.model, contextWindow: Math.min(o.model.contextWindow, h.contextWindow) } as Model<Api>;
+	const withWindow = (m: Model<Api>) =>
+		({ ...m, contextWindow: Math.min(m.contextWindow, h.contextWindow) }) as Model<Api>;
+	let model = withWindow(o.model);
+	let fallbackUsed = false;
 	const openSession = async (
 		systemPrompt: string,
 		sessionTools: ToolDefinition<any, any, any>[],
@@ -439,6 +449,18 @@ export async function runTerminalAgent(o: TerminalAgentOptions): Promise<Termina
 		);
 
 	let lengthRecoveries = 0;
+	/** After the provider blocks a reply, finish the run on the fallback model (keeps the conversation). */
+	const switchToFallback = async () => {
+		if (!o.fallbackModel || fallbackUsed) return;
+		fallbackUsed = true;
+		model = withWindow(o.fallbackModel);
+		try {
+			await session.setModel(model);
+			errors.push(`switched to fallback model ${o.fallbackModel.id} after a filtered reply`);
+		} catch (error) {
+			errors.push(`switching to the fallback model failed: ${errorMessage(error)}`);
+		}
+	};
 	/** session.prompt, then continue replies cut off by the output limit instead of ending the run. */
 	const promptAgent = async (text: string) => {
 		await session.prompt(text);
@@ -449,6 +471,7 @@ export async function runTerminalAgent(o: TerminalAgentOptions): Promise<Termina
 			onError: (message) => errors.push(message),
 			maxFilterRetries: h.maxFilterRetries,
 			filteredPrompt: () => h.filteredPrompt,
+			onFiltered: switchToFallback,
 		});
 	};
 
@@ -465,6 +488,11 @@ export async function runTerminalAgent(o: TerminalAgentOptions): Promise<Termina
 		});
 		try {
 			await reviewer.prompt(request);
+			if (endsFiltered(reviewer) && o.fallbackModel && stopReason === "completed") {
+				await switchToFallback();
+				await reviewer.setModel(model);
+				await reviewer.prompt(h.filteredPrompt);
+			}
 			if (endsTruncated(reviewer) && stopReason === "completed")
 				await reviewer.prompt(
 					"Your reply was cut off by the output length limit. Finish the review now: list the problems you found, then end with the verdict line.",
@@ -586,6 +614,7 @@ export async function runTerminalAgent(o: TerminalAgentOptions): Promise<Termina
 		stopReason,
 		finishChecks,
 		lengthRecoveries,
+		fallbackUsed,
 		reviews,
 		finalText: session.getLastAssistantText() ?? "",
 		errors,
