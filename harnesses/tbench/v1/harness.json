@@ -23,5 +23,6 @@
 		"maxRounds": 2,
 		"minTimeLeftSec": 900
 	},
-	"maxLengthRecoveries": 0
+	"maxLengthRecoveries": 0,
+	"maxFilterRetries": 0
 }

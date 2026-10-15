@@ -245,12 +245,23 @@ async function taskExtras(
 	return parts.join("\n\n");
 }
 
+function lastAssistant(s: {
+	messages: readonly unknown[];
+}): { stopReason?: string; errorMessage?: string } | undefined {
+	return [...s.messages].reverse().find((m) => (m as { role?: string }).role === "assistant") as
+		| { stopReason?: string; errorMessage?: string }
+		| undefined;
+}
+
 /** Whether the last assistant message was cut off by the output limit. */
 export function endsTruncated(s: { messages: readonly unknown[] }): boolean {
-	const last = [...s.messages].reverse().find((m) => (m as { role?: string }).role === "assistant") as
-		| { stopReason?: string }
-		| undefined;
-	return last?.stopReason === "length";
+	return lastAssistant(s)?.stopReason === "length";
+}
+
+/** Whether the provider blocked the last reply (Bedrock's content filter returns no content). */
+export function endsFiltered(s: { messages: readonly unknown[] }): boolean {
+	const last = lastAssistant(s);
+	return last?.stopReason === "error" && /content_filtered/i.test(last.errorMessage ?? "");
 }
 
 export interface TruncatableSession {
@@ -262,27 +273,41 @@ export interface TruncatableSession {
 
 /**
  * Continues a session whose reply was cut off by the output limit (a runaway thought, or a context so full that
- * little output room remained), compacting first when the context is large. pi retries a truncated reply once per
- * run by itself; this covers the rest. Returns the number of continuations sent.
+ * little output room remained), compacting first when the context is large; pi retries a truncated reply once per
+ * run by itself and this covers the rest. Also re-prompts, a bounded number of times, after a reply the provider's
+ * content filter blocked (stochastic false positives on benign tasks). Returns the number of prompts sent.
  */
 export async function continueTruncated(
 	s: TruncatableSession,
-	o: { maxRecoveries: number; canContinue: () => boolean; continuePrompt: () => string; onError: (m: string) => void },
+	o: {
+		maxRecoveries: number;
+		canContinue: () => boolean;
+		continuePrompt: () => string;
+		onError: (m: string) => void;
+		maxFilterRetries?: number;
+		filteredPrompt?: () => string;
+	},
 ): Promise<number> {
-	let n = 0;
-	while (n < o.maxRecoveries && o.canContinue() && endsTruncated(s)) {
-		n++;
-		const usage = s.getContextUsage();
-		if (usage?.tokens && usage.tokens > 0.7 * usage.contextWindow) {
-			try {
-				await s.compact();
-			} catch (error) {
-				o.onError(`compaction after a truncated reply failed: ${errorMessage(error)}`);
+	let truncations = 0;
+	let filtered = 0;
+	while (o.canContinue()) {
+		if (endsTruncated(s) && truncations < o.maxRecoveries) {
+			truncations++;
+			const usage = s.getContextUsage();
+			if (usage?.tokens && usage.tokens > 0.7 * usage.contextWindow) {
+				try {
+					await s.compact();
+				} catch (error) {
+					o.onError(`compaction after a truncated reply failed: ${errorMessage(error)}`);
+				}
 			}
-		}
-		await s.prompt(o.continuePrompt());
+			await s.prompt(o.continuePrompt());
+		} else if (endsFiltered(s) && filtered < (o.maxFilterRetries ?? 0)) {
+			filtered++;
+			await s.prompt((o.filteredPrompt ?? o.continuePrompt)());
+		} else break;
 	}
-	return n;
+	return truncations + filtered;
 }
 
 /** Runs one Terminal-Bench task: the pi agent on the host, its tools in the task container. */
@@ -422,6 +447,8 @@ export async function runTerminalAgent(o: TerminalAgentOptions): Promise<Termina
 			canContinue: () => stopReason === "completed" && remaining() > 60,
 			continuePrompt: () => renderTemplate(h.continuePrompt, { time_left: formatDuration(remaining()) }),
 			onError: (message) => errors.push(message),
+			maxFilterRetries: h.maxFilterRetries,
+			filteredPrompt: () => h.filteredPrompt,
 		});
 	};
 

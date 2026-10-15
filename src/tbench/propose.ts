@@ -48,6 +48,8 @@ const SETTING_KEYS = new Set([
 	"maxLengthRecoveries",
 	"continuePrompt",
 	"designer",
+	"maxFilterRetries",
+	"filteredPrompt",
 ]);
 
 export interface ScreenResult {

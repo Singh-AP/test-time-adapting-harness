@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { describe, expect, test } from "vitest";
-import { continueTruncated, endsTruncated, runTerminalAgent } from "../src/tbench/agent.ts";
+import { continueTruncated, endsFiltered, endsTruncated, runTerminalAgent } from "../src/tbench/agent.ts";
 import { type Harness, loadHarness } from "../src/tbench/harness.ts";
 import type { RemoteEnvironment } from "../src/tbench/remote.ts";
 
@@ -60,6 +60,8 @@ function testHarness(extra: Partial<Harness> = {}): Harness {
 		timeWarnings: [],
 		maxLengthRecoveries: 4,
 		continuePrompt: "Your last reply was cut off by the output length limit. Continue ({{time_left}} left).",
+		maxFilterRetries: 2,
+		filteredPrompt: "The provider blocked your previous reply. Continue.",
 		...extra,
 	};
 }
@@ -174,6 +176,52 @@ describe("truncated replies", () => {
 		expect(n).toBe(2);
 		expect(prompts).toEqual(["CONTINUE", "CONTINUE"]);
 		expect(compactions).toBe(2);
+	});
+
+	test("continueTruncated also re-prompts after a reply the provider filtered, up to its own limit", async () => {
+		const messages: Record<string, unknown>[] = [
+			{ role: "assistant", stopReason: "error", errorMessage: "Provider stopped with: content_filtered" },
+		];
+		const prompts: string[] = [];
+		const replies: Record<string, unknown>[] = [
+			{ role: "assistant", stopReason: "error", errorMessage: "Provider stopped with: content_filtered" },
+			{ role: "assistant", stopReason: "stop" },
+		];
+		const session = {
+			messages,
+			prompt: async (text: string) => {
+				prompts.push(text);
+				messages.push({ role: "user" }, replies.shift() as Record<string, unknown>);
+			},
+			compact: async () => {},
+			getContextUsage: () => ({ tokens: 10, contextWindow: 1_000_000 }),
+		};
+		const n = await continueTruncated(session, {
+			maxRecoveries: 5,
+			maxFilterRetries: 3,
+			canContinue: () => true,
+			continuePrompt: () => "CONTINUE",
+			filteredPrompt: () => "FILTERED",
+			onError: () => {},
+		});
+		expect(n).toBe(2);
+		expect(prompts).toEqual(["FILTERED", "FILTERED"]);
+		expect(endsFiltered({ messages })).toBe(false);
+		const stuck = {
+			...session,
+			messages: [{ role: "assistant", stopReason: "error", errorMessage: "content_filtered" }],
+			prompt: async () => {},
+		};
+		expect(
+			await continueTruncated(stuck, {
+				maxRecoveries: 5,
+				maxFilterRetries: 3,
+				canContinue: () => true,
+				continuePrompt: () => "C",
+				filteredPrompt: () => "F",
+				onError: () => {},
+			}),
+		).toBe(3);
 	});
 
 	test("continueTruncated stops at the limit and when continuing is not allowed", async () => {

@@ -61,6 +61,9 @@ export interface Harness {
 	maxLengthRecoveries: number;
 	/** Sent after a truncated reply; `{{time_left}}` is replaced. */
 	continuePrompt: string;
+	/** Re-prompts after a reply the provider's content filter blocked, per prompt. */
+	maxFilterRetries: number;
+	filteredPrompt: string;
 }
 
 export const HARNESS_DEFAULTS: Omit<Harness, "name" | "systemPrompt" | "userPrompt" | "probe" | "finishCheck"> = {
@@ -73,6 +76,8 @@ export const HARNESS_DEFAULTS: Omit<Harness, "name" | "systemPrompt" | "userProm
 	maxLengthRecoveries: 6,
 	continuePrompt:
 		"Your last reply was cut off by the output length limit before you acted. Continue the task from where you were: keep your reasoning brief and call the tools you need. About {{time_left}} remain.",
+	maxFilterRetries: 3,
+	filteredPrompt: "The provider blocked your previous reply. Continue the task from where you left off.",
 };
 
 async function optionalFile(path: string): Promise<string> {
