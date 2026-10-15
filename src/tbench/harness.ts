@@ -15,6 +15,16 @@ export interface ReviewSettings {
 	minTimeLeftSec: number;
 }
 
+/** A fresh session that predicts the hidden tests before the agent starts (bash and read, no edits). */
+export interface DesignerSettings {
+	prompt: string;
+	/** Designer's first message; `{{instruction}}`, `{{environment}}` are replaced. */
+	request: string;
+	/** Appended to the agent's first message; `{{checks}}` is the designer's answer. */
+	handoff: string;
+	timeoutSec: number;
+}
+
 export interface BashSettings {
 	defaultTimeoutSec: number;
 	maxTimeoutSec: number;
@@ -44,6 +54,7 @@ export interface Harness {
 	/** Fractions of the time budget at which the agent is told how much time remains. */
 	timeWarnings: number[];
 	review?: ReviewSettings;
+	designer?: DesignerSettings;
 	/** Continuations after a reply cut off by the output limit (compacting first when the context is large). */
 	maxLengthRecoveries: number;
 	/** Sent after a truncated reply; `{{time_left}}` is replaced. */
@@ -73,7 +84,21 @@ async function optionalFile(path: string): Promise<string> {
 export async function loadHarness(dir: string): Promise<Harness> {
 	const config = JSON.parse(await readFile(join(dir, "harness.json"), "utf8")) as Partial<Harness> & {
 		review?: Partial<ReviewSettings>;
+		designer?: Partial<DesignerSettings>;
 	};
+	const designerPrompt = await optionalFile(join(dir, "designer.md"));
+	const designer: DesignerSettings | undefined = designerPrompt
+		? {
+				prompt: designerPrompt,
+				request:
+					(await optionalFile(join(dir, "designer-request.md"))) ||
+					"# Task\n{{instruction}}\n\n# Environment\n{{environment}}",
+				handoff:
+					(await optionalFile(join(dir, "designer-handoff.md"))) ||
+					"An independent test designer, who has not seen your work, predicts that the hidden tests check:\n\n{{checks}}\n\nTreat these as requirements to satisfy and verify, in addition to the task statement.",
+				timeoutSec: config.designer?.timeoutSec ?? 900,
+			}
+		: undefined;
 	const reviewPrompt = await optionalFile(join(dir, "review.md"));
 	const review: ReviewSettings | undefined = reviewPrompt
 		? {
@@ -99,6 +124,7 @@ export async function loadHarness(dir: string): Promise<Harness> {
 		probe: await optionalFile(join(dir, "probe.sh")),
 		finishCheck: await optionalFile(join(dir, "finish.md")),
 		review,
+		designer,
 	};
 }
 

@@ -31,6 +31,9 @@ export const HARNESS_FILES = [
 	"review.md",
 	"review-request.md",
 	"review-followup.md",
+	"designer.md",
+	"designer-request.md",
+	"designer-handoff.md",
 ];
 const MAX_PROMPT_CHARS = 24_000;
 const SETTING_KEYS = new Set([
@@ -44,6 +47,7 @@ const SETTING_KEYS = new Set([
 	"review",
 	"maxLengthRecoveries",
 	"continuePrompt",
+	"designer",
 ]);
 
 export interface ScreenResult {
@@ -82,6 +86,12 @@ export async function screenHarnessDir(dir: string, o: { forbidden: string[] }):
 		if (!(harness.review.maxRounds >= 0 && harness.review.maxRounds <= 5))
 			return { ok: false, reason: "review.maxRounds must be between 0 and 5" };
 	}
+	if (harness.designer) {
+		if (!harness.designer.request.includes("{{instruction}}"))
+			return { ok: false, reason: "designer-request.md must contain {{instruction}}" };
+		if (!harness.designer.handoff.includes("{{checks}}"))
+			return { ok: false, reason: "designer-handoff.md must contain {{checks}}" };
+	}
 	const texts: string[] = [];
 	for (const file of HARNESS_FILES) texts.push(await readFile(join(dir, file), "utf8").catch(() => ""));
 	const total = texts.reduce((n, t) => n + t.length, 0);
@@ -106,7 +116,8 @@ A fixed model solves Terminal-Bench tasks: hard, realistic tasks in a Linux cont
 - user.md: the first user message. {{instruction}} is the task statement, {{environment}} the output of probe.sh, {{time_budget}} the wall-clock budget.
 - probe.sh: a shell script run in the container before the first turn; its output fills {{environment}}.
 - finish.md: sent when the agent first stops, asking it to verify ({{time_left}} available). Empty disables it.
-- review.md, review-request.md, review-followup.md: an independent reviewer (fresh context, bash and read tools) audits the container after the agent stops. review-request.md is its first message ({{instruction}}, {{summary}}, {{time_left}}). It must end with "VERDICT: PASS" or "VERDICT: FAIL" and numbered issues; on FAIL, review-followup.md ({{issues}}, {{time_left}}) goes back to the agent. Deleting review.md disables reviews.
+- review.md, review-request.md, review-followup.md: an independent reviewer (fresh context, bash and read tools) audits the container after the agent stops. review-request.md is its first message ({{instruction}}, {{summary}}, {{time_left}}). It must end with "VERDICT: PASS" or "VERDICT: FAIL" and numbered issues; on FAIL, review-followup.md ({{issues}}, {{time_left}}) goes back to the agent. Deleting review.md disables reviews. review-request.md may also use {{predicted_checks}}.
+- designer.md, designer-request.md, designer-handoff.md: before the agent starts, an independent test designer (fresh context, bash and read) predicts the hidden tests. designer-request.md is its first message ({{instruction}}, {{environment}}); its answer is appended to the agent's first message through designer-handoff.md ({{checks}}). Deleting designer.md disables it; harness.json designer {timeoutSec}.
 - harness.json: thinkingLevel (off|minimal|low|medium|high|xhigh|max), maxFinishChecks, bash {defaultTimeoutSec, maxTimeoutSec, headBytes, tailBytes}, contextWindow (compaction triggers near it), compaction {enabled, reserveTokens, keepRecentTokens}, timeWarnings (fractions of the budget at which the agent is told the remaining time), review {maxRounds, minTimeLeftSec}, maxLengthRecoveries and continuePrompt (what happens when a reply is cut off by the output limit).
 
 Tools the agent has: bash (fresh shell per call, stdin is /dev/null, output capped to head and tail, timeout), read, edit, write.

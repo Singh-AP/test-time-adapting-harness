@@ -219,6 +219,50 @@ describe("truncated replies", () => {
 	});
 });
 
+describe("independent test designer", () => {
+	test("predicted hidden checks reach the agent's first message and the reviewer", async () => {
+		const { env, root } = await localEnvironment();
+		const { runtime, model } = await fauxRuntime([
+			fauxAssistantMessage([fauxToolCall("bash", { command: "ls" })], { stopReason: "toolUse" }),
+			fauxAssistantMessage([fauxText("1. out.txt contains exactly 42\n2. it ends with a newline")]),
+			fauxAssistantMessage([fauxText("Done.")]),
+			fauxAssistantMessage([fauxText("VERDICT: PASS")]),
+		]);
+		const logsDir = await mkdtemp(join(tmpdir(), "tta-designer-logs-"));
+		const result = await runTerminalAgent({
+			instruction: "Write 42 to out.txt",
+			env,
+			runtime,
+			model,
+			harness: testHarness({
+				finishCheck: "",
+				designer: {
+					prompt: "You write the hidden tests.",
+					request: "TASK:\n{{instruction}}",
+					handoff: "PREDICTED CHECKS:\n{{checks}}",
+					timeoutSec: 300,
+				},
+				review: {
+					prompt: "R",
+					request: "{{instruction}}\nCHECKS FOR REVIEW:\n{{predicted_checks}}",
+					followup: "{{issues}}",
+					maxRounds: 1,
+					minTimeLeftSec: 0,
+				},
+			}),
+			timeBudgetSec: 600,
+			cwd: root,
+			logsDir,
+		});
+		expect(result.stopReason).toBe("completed");
+		const transcript = await readFile(join(logsDir, "transcript.md"), "utf8");
+		expect(transcript).toContain("PREDICTED CHECKS:\n1. out.txt contains exactly 42");
+		const review = await readFile(join(logsDir, "review-1.md"), "utf8");
+		expect(review).toContain("CHECKS FOR REVIEW:\n1. out.txt contains exactly 42");
+		expect(await readFile(join(logsDir, "designer.md"), "utf8")).toContain("TASK:\nWrite 42 to out.txt");
+	});
+});
+
 describe("task-provided skills and MCP servers", () => {
 	test("are listed in the first message", async () => {
 		const { env, root } = await localEnvironment();

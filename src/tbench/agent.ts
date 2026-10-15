@@ -15,7 +15,14 @@ import {
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { clip, errorMessage } from "../util/text.ts";
-import { type BashSettings, formatDuration, type Harness, type ReviewSettings, renderTemplate } from "./harness.ts";
+import {
+	type BashSettings,
+	type DesignerSettings,
+	formatDuration,
+	type Harness,
+	type ReviewSettings,
+	renderTemplate,
+} from "./harness.ts";
 import { McpSseClient, mcpToolDefinitions } from "./mcp.ts";
 import { type RemoteEnvironment, RemoteShell, remoteFileOperations, shellQuote } from "./remote.ts";
 
@@ -423,6 +430,7 @@ export async function runTerminalAgent(o: TerminalAgentOptions): Promise<Termina
 			instruction: o.instruction,
 			summary: session.getLastAssistantText() ?? "(no summary)",
 			time_left: formatDuration(remaining()),
+			predicted_checks: predictedChecks || "(none)",
 		});
 		try {
 			await reviewer.prompt(request);
@@ -465,14 +473,48 @@ export async function runTerminalAgent(o: TerminalAgentOptions): Promise<Termina
 		};
 	};
 
+	let predictedChecks = "";
+	const design = async () => {
+		const d = h.designer as DesignerSettings;
+		const designer = await openSession(d.prompt, [bashTool(shell, cwd, h.bash), read]);
+		active = designer;
+		const timer = setTimeout(() => void designer.abort(), Math.min(d.timeoutSec, remaining() / 4) * 1000);
+		try {
+			await designer.prompt(
+				renderTemplate(d.request, { instruction: o.instruction, environment: environment || "(no snapshot)" }),
+			);
+		} catch (error) {
+			errors.push(`test designer failed: ${errorMessage(error)}`);
+		} finally {
+			clearTimeout(timer);
+			active = session;
+		}
+		predictedChecks = clip((designer.getLastAssistantText() ?? "").trim(), 8000);
+		const stats = designer.getSessionStats();
+		reviewCost.input += stats.tokens.input;
+		reviewCost.output += stats.tokens.output;
+		reviewCost.cacheRead += stats.tokens.cacheRead;
+		reviewCost.cacheWrite += stats.tokens.cacheWrite;
+		reviewCost.cost += stats.cost;
+		if (o.logsDir) {
+			await mkdir(o.logsDir, { recursive: true });
+			await writeFile(join(o.logsDir, "designer.md"), `${renderTranscript(designer.messages)}\n`);
+		}
+		designer.dispose();
+	};
+
 	let finishChecks = 0;
 	try {
+		if (h.designer && remaining() > 300) await design();
+		const firstMessage = renderTemplate(h.userPrompt, {
+			instruction: o.instruction,
+			environment: environment || "(no environment snapshot)",
+			time_budget: formatDuration(remaining()),
+		});
 		await promptAgent(
-			renderTemplate(h.userPrompt, {
-				instruction: o.instruction,
-				environment: environment || "(no environment snapshot)",
-				time_budget: formatDuration(remaining()),
-			}),
+			predictedChecks && h.designer
+				? `${firstMessage}\n\n${renderTemplate(h.designer.handoff, { checks: predictedChecks })}`
+				: firstMessage,
 		);
 		while (stopReason === "completed" && h.finishCheck && finishChecks < h.maxFinishChecks && remaining() > 60) {
 			finishChecks++;
