@@ -143,3 +143,13 @@ v6 was developed with Sonnet 5.5; these runs swap in Opus 5.5 at max effort with
 - Opus runs are shorter (147 against 209 minutes on average) and cost about the same. On held-out tasks, the fair
   comparison because v6 was tuned with Sonnet on dev tasks, Sonnet scores higher; with one trial per task the gap
   (about 3 tasks) is near run-to-run noise.
+
+## GPU tasks (3 tasks, one H100)
+
+- v0 + Sonnet 5.5 solved all three for $59: `fp8-rmsnorm-gemm` and `jax-speedrun-gpu` (dev), and `math-eval-grader`
+  (held-out).
+- v6 + Sonnet 5.5 solved `math-eval-grader`, at $72 and 409 minutes against v0's $19 and 102 minutes.
+- The remaining v6 and Opus GPU trials were stopped. v0 already solves these tasks, so the trials could not change
+  any conclusion.
+- Counting `math-eval-grader`, the held-out score over all 25 offline held-out tasks is 0.520 for v0 and 0.680 for
+  v6.
