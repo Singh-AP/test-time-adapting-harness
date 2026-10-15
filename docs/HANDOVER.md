@@ -424,11 +424,28 @@ continue with **TB 4.0 offline**, and the guardrail must not be bypassed.
 18. The Mac's egress IP can change (it moved to <client-ip>). If SSH times out, check with
     `curl checkip.amazonaws.com` and `aws_infra allow-ip` before suspecting BPA.
 
-**Status at writing.**
+**Status at writing (2026-10-15 03:50).**
 
-- Oracle on 53 CPU tasks: all pass except `cad-model` (upstream), `live-database-cutover`, and the two network-probe
-  failures, which are being re-run with the remaining oracle tasks.
-- Smoke run of v0 (Opus 5.5 at high thinking) on `session-window-debug`: 5/7 tests passed, reward 0, $0.32,
-  2 minutes. The agent stopped with self-declared "known gaps". This was also before the status-parsing fix
-  (pitfall 7).
-- Running: `v0-sonnet` and `v1-sonnet` on all 63 CPU tasks (k=1, n=32 each), plus `oracle-rest` and `oracle-gpu`.
+- **Harness loop (Sonnet 5.5, offline, dev split).** The versions are v0 to v7 (see `experiments/tbench/history.md`
+  and the `CHANGES.md` in each harness).
+  - The best is **v6**: v3's failure-pattern guidance, v5's judgment-call tie-breakers, and v4's reviewer with a
+    targeted checklist. On the hard dev tasks (2 trials each) it scores 0.67 against 0.44 for v3.
+  - v7 (a test designer) hurt and was rejected.
+  - Three dev tasks fail in every version (`bun-sourcemap-leak`, `cargo-flight-dispatch`,
+    `freight-dispatch-shift`); they look capability-limited.
+- **Baselines.** v0 offline on 46 CPU tasks: 0.630 (dev 0.773, held-out 0.500), $546. v0 GPU: `fp8` 1, `math-eval`
+  1, `jax` still running at writing.
+- **Running.**
+  - `v6-full`: Sonnet on all 46 CPU tasks, the generalization check. Early paired held-out result: v0 0.455 vs
+    v6 0.636 on 11 tasks.
+  - `v6-opus-1`: **Opus 5.5** (`global.anthropic.claude-opus-5-5`) with v6, offline, all 46 CPU tasks, 1 trial.
+  - The GPU host queue runs `v6-full-gpu`, then `v6-opus-1-gpu` (`~/gpu-queue-3.sh`, `~/gpu-queue-4.sh`).
+- **Spend.** About $2.9k on Bedrock by 21:00 on 2026-10-14, most of it Sonnet trials. Opus one-trial runs cost about
+  $1.5 to 2k per full pass.
+- **Next.**
+  - Summarize `v6-full` against `v0-off`, per split, with `experiments/tbench/compare.ts` and `summarize.py`.
+  - Report the Opus result.
+  - Decide with the user on 5 trials per task (about $6k), and on offline versus online (BPA is still `off`, so an
+    online run would be comparable with the leaderboard).
+- **Tools.** `experiments/tbench/{run.sh, sync.sh, summarize.py, compare.ts, wait.sh, split.py, offline.sh,
+  harbor.sh}`; `TTA_TASKS=...` runs an explicit task list.
