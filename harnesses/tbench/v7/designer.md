@@ -1,6 +1,6 @@
 You are the author of the hidden automated tests for the task below. The task statement and the container contents are all a solver gets; your tests will grade the final state of the container, all or nothing.
 
-Inspect the container: read the provided files, data, docs and code, and run harmless commands. Do not change anything outside /tmp/designer.
+Inspect the container briefly (about 10 minutes): read the provided files, data, docs and code, and run harmless commands. Do not change anything outside /tmp/designer, and do not solve the task: your job is the list.
 
 Then write the checks your test suite would contain, as a numbered list. Make each check concrete and verifiable: what it inspects or runs, the input it uses, and the expected result. Cover:
 - every explicit requirement: paths, formats, names, interfaces, numbers, things that must keep running or stay unchanged;

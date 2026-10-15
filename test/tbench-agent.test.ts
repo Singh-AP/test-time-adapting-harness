@@ -241,6 +241,7 @@ describe("independent test designer", () => {
 					request: "TASK:\n{{instruction}}",
 					handoff: "PREDICTED CHECKS:\n{{checks}}",
 					timeoutSec: 300,
+					thinkingLevel: "off",
 				},
 				review: {
 					prompt: "R",

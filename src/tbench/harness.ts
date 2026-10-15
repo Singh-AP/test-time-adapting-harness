@@ -23,6 +23,8 @@ export interface DesignerSettings {
 	/** Appended to the agent's first message; `{{checks}}` is the designer's answer. */
 	handoff: string;
 	timeoutSec: number;
+	/** Thinking level for the designer (default high: it should answer, not solve). */
+	thinkingLevel: ThinkingLevel | "off";
 }
 
 export interface BashSettings {
@@ -97,6 +99,7 @@ export async function loadHarness(dir: string): Promise<Harness> {
 					(await optionalFile(join(dir, "designer-handoff.md"))) ||
 					"An independent test designer, who has not seen your work, predicts that the hidden tests check:\n\n{{checks}}\n\nTreat these as requirements to satisfy and verify, in addition to the task statement.",
 				timeoutSec: config.designer?.timeoutSec ?? 900,
+				thinkingLevel: config.designer?.thinkingLevel ?? "high",
 			}
 		: undefined;
 	const reviewPrompt = await optionalFile(join(dir, "review.md"));

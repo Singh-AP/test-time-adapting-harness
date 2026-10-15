@@ -329,14 +329,18 @@ export async function runTerminalAgent(o: TerminalAgentOptions): Promise<Termina
 		...mcp.tools,
 	];
 	const model = { ...o.model, contextWindow: Math.min(o.model.contextWindow, h.contextWindow) } as Model<Api>;
-	const openSession = async (systemPrompt: string, sessionTools: ToolDefinition<any, any, any>[]) =>
+	const openSession = async (
+		systemPrompt: string,
+		sessionTools: ToolDefinition<any, any, any>[],
+		thinkingLevel: Harness["thinkingLevel"] = h.thinkingLevel,
+	) =>
 		(
 			await createAgentSession({
 				cwd,
 				agentDir: o.logsDir ? join(o.logsDir, ".pi") : undefined,
 				modelRuntime: o.runtime,
 				model,
-				thinkingLevel: h.thinkingLevel === "off" ? undefined : h.thinkingLevel,
+				thinkingLevel: thinkingLevel === "off" ? undefined : thinkingLevel,
 				noTools: "builtin",
 				tools: sessionTools.map((t) => t.name),
 				customTools: sessionTools,
@@ -476,17 +480,29 @@ export async function runTerminalAgent(o: TerminalAgentOptions): Promise<Termina
 	let predictedChecks = "";
 	const design = async () => {
 		const d = h.designer as DesignerSettings;
-		const designer = await openSession(d.prompt, [bashTool(shell, cwd, h.bash), read]);
+		const designer = await openSession(d.prompt, [bashTool(shell, cwd, h.bash), read], d.thinkingLevel);
 		active = designer;
-		const timer = setTimeout(() => void designer.abort(), Math.min(d.timeoutSec, remaining() / 4) * 1000);
+		// Ask for the answer well before the limit; a turn in progress finishes first, so allow a grace period.
+		const limitMs = Math.min(d.timeoutSec, remaining() / 4) * 1000;
+		const wrapUp = setTimeout(
+			() =>
+				void designer
+					.steer("Time is up: stop investigating and reply now with your numbered list of checks.")
+					.catch(() => {}),
+			limitMs * 0.6,
+		);
+		const stop = setTimeout(() => void designer.abort(), limitMs + 180_000);
 		try {
 			await designer.prompt(
 				renderTemplate(d.request, { instruction: o.instruction, environment: environment || "(no snapshot)" }),
 			);
+			if (!/^\s*1[.)]/m.test(designer.getLastAssistantText() ?? ""))
+				await designer.prompt("Reply now with your numbered list of checks only.");
 		} catch (error) {
 			errors.push(`test designer failed: ${errorMessage(error)}`);
 		} finally {
-			clearTimeout(timer);
+			clearTimeout(wrapUp);
+			clearTimeout(stop);
 			active = session;
 		}
 		predictedChecks = clip((designer.getLastAssistantText() ?? "").trim(), 8000);
