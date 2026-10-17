@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { buildTbenchReport, loadTrials } from "../src/tbench/report.ts";
+import { buildTbenchReport, comparisonTasks, loadTrials } from "../src/tbench/report.ts";
 
 async function fakeJob() {
 	const job = await mkdtemp(join(tmpdir(), "tta-tbench-job-"));
@@ -75,5 +75,16 @@ describe("tbench report", () => {
 		expect(report).toContain("last words of beta");
 		expect(report).toContain("10 of 480 budget minutes used");
 		expect(report).not.toContain("gamma");
+	});
+});
+
+describe("comparisonTasks", () => {
+	const split = { dev: ["tb/a", "tb/b"], heldout: ["tb/c"], offline: ["tb/a", "tb/c"] };
+
+	test("covers every task of the subset, and only the offline-solvable ones when asked", () => {
+		expect([...comparisonTasks(split, "dev", false)]).toEqual(["tb/a", "tb/b"]);
+		expect([...comparisonTasks(split, "all", false)]).toEqual(["tb/a", "tb/b", "tb/c"]);
+		expect([...comparisonTasks(split, "dev", true)]).toEqual(["tb/a"]);
+		expect([...comparisonTasks(split, "all", true)]).toEqual(["tb/a", "tb/c"]);
 	});
 });

@@ -29,7 +29,7 @@ SECURITY_GROUP = "tta-tbench-ssh"
 ENDPOINT_GROUP = "tta-tbench-endpoints"
 INTERFACE_ENDPOINTS = ["bedrock-runtime", "ssm", "ssmmessages", "ec2messages"]
 KEY_PATH = pathlib.Path("~/.ssh/tta-tbench.pem").expanduser()
-REPO_URL = "https://github.com/Singh-AP/test-time-adapting-harness.git"
+REPO_URL = "https://github.com/Singh-AP/agent-harness-learning.git"
 HARBOR_SPEC = "harbor[ec2]==0.24.0"
 AMI_PARAMETERS = {
 	"cpu": "/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id",

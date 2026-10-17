@@ -1,15 +1,15 @@
 /**
- * Paired comparison of harness runs on the same tasks (dev split, offline set by default).
- * Usage: node experiments/tbench/compare.ts <label>=<job-dir>[,<job-dir>...] ... [--subset dev|heldout|all]
+ * Paired comparison of harness runs on the same tasks (dev split by default).
+ * Usage: node experiments/tbench/compare.ts <label>=<job-dir>[,<job-dir>...] ... [--subset dev|heldout|all] [--offline]
+ * --offline keeps only the tasks whose reference solution passes without internet (the split's "offline" list).
  */
 import { readFile } from "node:fs/promises";
-import { loadTrials, type TrialSummary } from "../../src/tbench/report.ts";
+import { comparisonTasks, loadTrials, type TrialSummary } from "../../src/tbench/report.ts";
 
 const args = process.argv.slice(2);
 const subset = args.includes("--subset") ? args[args.indexOf("--subset") + 1] : "dev";
 const split = JSON.parse(await readFile(new URL("splits/tb4.json", import.meta.url), "utf8"));
-const pool: string[] = subset === "all" ? [...split.dev, ...split.heldout] : split[subset];
-const allowed = new Set(pool.filter((t: string) => (split.offline ?? pool).includes(t)));
+const allowed = comparisonTasks(split, subset, args.includes("--offline"));
 const runs: { label: string; byTask: Map<string, TrialSummary[]> }[] = [];
 for (const spec of args.filter((a) => a.includes("="))) {
 	const [label, dirs] = spec.split("=");

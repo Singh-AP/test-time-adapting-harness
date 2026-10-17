@@ -39,6 +39,20 @@ async function readText(path: string): Promise<string> {
 	}
 }
 
+/**
+ * Tasks a comparison covers: the dev or held-out tasks of a split (or both, for "all"), optionally only those whose
+ * reference solution passes offline (the split's "offline" list).
+ */
+export function comparisonTasks(
+	split: { dev: string[]; heldout: string[]; offline?: string[] },
+	subset: string,
+	offlineOnly: boolean,
+): Set<string> {
+	const pool = subset === "all" ? [...split.dev, ...split.heldout] : subset === "heldout" ? split.heldout : split.dev;
+	const offline = new Set(split.offline ?? pool);
+	return new Set(offlineOnly ? pool.filter((t) => offline.has(t)) : pool);
+}
+
 /** Loads every trial under the given Harbor job directories, sorted by task name. */
 export async function loadTrials(jobDirs: string[]): Promise<TrialSummary[]> {
 	const trials: TrialSummary[] = [];

@@ -17,6 +17,52 @@ These runs use Terminal-Bench 4.0 offline (task containers without internet), on
 For reference, the public leaderboard (online, all 66 tasks, 5 trials per task) listed Claude Code with Opus 5.5 at
 64.85% in October 2026. The offline scores above are not directly comparable with it.
 
+## What v6 does differently
+
+Each change below came from failures on dev tasks, and each was kept only if it helped.
+
+1. **Cut-off replies no longer end the run.**
+   - The problem: in the first runs, 5 of 28 and 6 of 18 sessions ended on a reply cut off by the output limit.
+     pi treats a reply without tool calls as the end of the turn, so the agent stopped mid-task and reported
+     success.
+   - The fix: the harness detects a truncated reply, compacts the context first when it is large, and asks the
+     model to continue, up to 6 times.
+   - It also uses the model's full 1M-token window, with compaction near 400k tokens. Before, a window override had
+     left as little as 1k tokens of room for output.
+2. **Guidance on how hidden tests are usually failed.** An agentic proposer (Claude Opus 5.5) read the dev-task
+   failure report and wrote six rules into the system prompt:
+   - treat "infeasible", a missing credential or a near miss as a sign of a remaining bug;
+   - use every provided input;
+   - settle each judgment call with evidence;
+   - expect the tests to substitute other inputs;
+   - apply fixes where the task requires, not in a scratch area;
+   - use the time budget instead of stopping with known gaps.
+3. **Tie-breakers for judgment calls.** A second proposal found that agents named the right alternative as a
+   "judgment call", then picked the wrong one. The harness now says how to choose:
+   - the reading under which the task's goal works out;
+   - the field's standard method;
+   - the general case over a simplifying assumption;
+   - the strict reading of a prohibition.
+4. **An independent reviewer with a targeted checklist.**
+   - When the agent stops, a fresh session audits the container against the task statement and sends
+     evidence-backed problems back, for up to two rounds. It may write only under `/tmp/review`.
+   - A generic reviewer passed 16 of 18 trials, failed ones included. With a checklist of the same failure patterns,
+     the reviewer started catching real problems.
+5. **A finish audit.** The first two times the agent stops, it must list every caveat, unused input and judgment
+   call in its work, then resolve each one. If the summary would still need a limitations section, it is not done.
+6. **A fallback model when the provider blocks a reply.** Claude Opus 5.5's content filter on Amazon Bedrock blocked
+   replies on 6 of 46 tasks (security, cryptography and biology topics). With `--ak fallback_model=...` the run
+   switches models instead of ending; this recovered 3 of the 6.
+7. **A tool layer built for task containers.** See the next section.
+
+What did not help:
+
+- **A test designer** that predicts the hidden tests before the agent starts (v7) scored 0.33 on the hardest dev
+  tasks against v6's 0.67. Its predictions were sometimes wrong, and the agent treated them as requirements.
+- **A reviewer without the checklist** passed almost everything.
+- **Opus 5.5 with the same harness** scored 0.587 on all 46 tasks. On the hardest dev tasks it matched Sonnet 5.5
+  task for task.
+
 ## Architecture
 
 ```
@@ -176,7 +222,8 @@ reported.
    - grows the prompts past a size limit;
    - breaks a template.
 6. **Compare.** Run the parent and the candidate on the dev tasks that are not solved every time, with at least 2
-   trials each, and compare with `node experiments/tbench/compare.ts parent=<job> candidate=<job>`. About 5 of 22
+   trials each, and compare with `node experiments/tbench/compare.ts parent=<job> candidate=<job>`. Add `--offline`
+   to keep only the offline-solvable tasks. About 5 of 22
    dev tasks flip between runs of the same harness, so one-trial differences of a task or two are noise.
 7. **Report held-out** results only for the final choice.
 
