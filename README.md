@@ -1,9 +1,10 @@
 # agent-harness-learning
 
-**A coding-agent harness that gets better from its own failures.** It runs the [pi](https://github.com/earendil-works/pi)
-coding agent on [Terminal-Bench](https://www.tbench.ai/) with any model provider. When the agent fails, a second agent
-reads the failure reports and rewrites the harness, meaning the agent's prompts, self-checks, reviewer and settings.
-The model itself never changes.
+**A coding-agent harness that gets better from its own failures.** It applies harness learning, from
+[*Harness Learning Enables Generalizable Test-Time Adaptation*](https://arxiv.org/abs/2609.35738) (Zhang et al., 2026),
+to the [pi](https://github.com/earendil-works/pi) coding agent on [Terminal-Bench](https://www.tbench.ai/), with any
+model provider. When the agent fails, a proposer agent reads the failure reports and rewrites the harness: the agent's
+prompts, self-checks, reviewer and settings. The model itself never changes.
 
 With the same model on the same tasks, the learned harness solves **67%** of held-out Terminal-Bench 4.0 tasks,
 against **50%** for the starting harness ([details](#results)).
@@ -17,8 +18,8 @@ against **50%** for the starting harness ([details](#results)).
   proposer agent edit the harness, and edits that would memorize task names or test names are rejected.
 - **Any model provider:** Anthropic, OpenAI, OpenRouter, Amazon Bedrock and the other pi-ai providers.
 - **Credentials stay on the host.** Only the agent's commands run in the task's container.
-- **Beyond Terminal-Bench**, the same loop adapts harnesses for reasoning and question-answering tasks. This is an
-  implementation of [Harness Learning](https://arxiv.org/abs/2609.35738) (Zhang et al.).
+- **Beyond Terminal-Bench**, the same loop adapts harnesses for reasoning and question-answering tasks, as in the
+  paper.
 
 ## Requirements
 
@@ -197,12 +198,26 @@ tables are in [results/](results/).
 
 To run the tests: `npm test && npm run check && npm run test:py`.
 
-## Credits
+## Citation
 
-- **Harness Learning:** Zhang et al., *Harness Learning Enables Generalizable Test-Time Adaptation*,
-  [arXiv:2609.35738](https://arxiv.org/abs/2609.35738).
-- **Built on** [pi](https://github.com/earendil-works/pi), [Harbor](https://github.com/harbor-framework/harbor) and
-  [Terminal-Bench](https://www.tbench.ai/).
+This project builds on Harness Learning. If you use it, please cite the paper:
+
+```bibtex
+@article{zhang2026harness,
+  title   = {Harness Learning Enables Generalizable Test-Time Adaptation},
+  author  = {Zhang, Alvin and Liu, Xuecheng and Wang, Zixuan and Tajwar, Fahim and Arora, Daman and
+             Salakhutdinov, Ruslan and Khashabi, Daniel and Song, Yuda and Zanette, Andrea},
+  journal = {arXiv preprint arXiv:2609.35738},
+  year    = {2026}
+}
+```
+
+This repository runs the paper's test-time loop with off-the-shelf proposer models. The paper also trains the
+proposer with reinforcement learning, which is not done here; `node src/cli.ts export` produces the training data
+for it.
+
+It is built on [pi](https://github.com/earendil-works/pi), [Harbor](https://github.com/harbor-framework/harbor) and
+[Terminal-Bench](https://www.tbench.ai/).
 
 ## License
 
